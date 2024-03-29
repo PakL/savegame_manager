@@ -1,10 +1,11 @@
 use std::cell::RefCell;
 use std::fs::File;
-use std::io::BufReader;
+use std::path::{Path, PathBuf};
 
 use native_windows_gui as nwg;
 use native_windows_derive as nwd;
 
+use notify::{RecommendedWatcher, Watcher};
 use nwd::NwgUi;
 use nwg::NativeUi;
 use nwg::stretch::{ geometry::{ Size, Rect }, style:: { Dimension as D, FlexDirection } };
@@ -15,14 +16,19 @@ const NO_PADDING: Rect<D> = Rect { start: D::Points(0.0), end: D::Points(0.0), t
 const DATA_FILE: &str = "savegame_manager.json";
 
 #[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
 struct SavegameManagerAppData {
     source_path: String,
     dest_path: String,
+    disable_screenshots: bool,
 }
 
 #[derive(Default, NwgUi)]
 pub struct SavegameManagerApp {
     data: RefCell<SavegameManagerAppData>,
+
+    watcher_path: RefCell<Option<Box<PathBuf>>>,
+    watcher: RefCell<Option<RecommendedWatcher>>,
 
     #[nwg_control(size: (800, 600), title: "Savegame Manager", flags: "MAIN_WINDOW")]
     #[nwg_events( OnWindowClose: [SavegameManagerApp::exit] )]
@@ -65,10 +71,22 @@ pub struct SavegameManagerApp {
     dest_button: nwg::Button,
 
 
-    // Placeholder
+    #[nwg_control(parent: window, text: "Make screenshots when creating backup", check_state: nwg::CheckBoxState::Checked)]
+    #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Points(25.0) })]
+    #[nwg_events(OnButtonClick: [SavegameManagerApp::checkbox_click])]
+    screenshots_check: nwg::CheckBox,
+
     #[nwg_control(parent: window)]
     #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Auto }, flex_grow: 1.0)]
     savegame_list: SavegameListView,
+}
+
+struct SavegameSourceWatcher;
+
+impl notify::EventHandler for SavegameSourceWatcher {
+    fn handle_event(&mut self, _event: notify::Result<notify::Event>) {
+        
+    }
 }
 
 impl SavegameManagerApp {
@@ -81,21 +99,63 @@ impl SavegameManagerApp {
 
         nwg::stop_thread_dispatch();
     }
+    
+    fn start_watcher(&self) {
+        let data = self.data.borrow();
+        let src_path = Path::new(data.source_path.as_str());
+        let dst_path = Path::new(data.dest_path.as_str());
+
+        if data.source_path.len() > 0 && data.dest_path.len() > 0 && src_path.exists() && dst_path.exists() && src_path.is_dir() && dst_path.is_dir() {
+            let mut current_path = self.watcher_path.borrow_mut();
+            let mut watcher = self.watcher.borrow_mut();
+
+            if let Some(current_path_box) = current_path.as_ref() {
+                let current_path_path = current_path_box.as_ref();
+                if let Some(rec_watch) = watcher.as_mut() {
+                    rec_watch.unwatch(current_path_path).unwrap_or_default();
+                }
+            }
+
+            let mut rec_watch_result = notify::recommended_watcher(SavegameSourceWatcher);
+            if let Ok(mut rec_watch) = rec_watch_result {
+                rec_watch.watch(src_path, notify::RecursiveMode::NonRecursive);
+                *watcher = Some(rec_watch);
+                *current_path = Some(Box::new(src_path.to_owned()));
+            } else {
+                *watcher = None;
+                *current_path = None;
+            }
+        }
+    }
 
     fn load_data(&self) {
         let mut data = self.data.borrow_mut();
-        if let Ok(file) = File::open(DATA_FILE) {
-            if let Ok(json) = serde_json::from_reader::<File, SavegameManagerAppData>(file) {
-                *data = json;
-                if data.source_path.len() > 0 {
-                    self.source_button.set_text(&data.source_path);
+
+        match File::open(DATA_FILE) {
+            Ok(file) => {
+                match serde_json::from_reader::<File, SavegameManagerAppData>(file) {
+                    Ok(json) => {
+                        *data = json;
+                        if data.source_path.len() > 0 {
+                            self.source_button.set_text(&data.source_path);
+                        }
+                        if data.dest_path.len() > 0 {
+                            self.dest_button.set_text(&data.dest_path);
+                        }
+                        self.screenshots_check.set_check_state(if data.disable_screenshots { nwg::CheckBoxState::Unchecked } else { nwg::CheckBoxState::Checked });
+                    },
+                    Err(err) => {
+                        nwg::modal_error_message(&self.window, "Config file error", format!("Unable to parse config file. {:?}", err).as_str());
+                    }
                 }
-                if data.dest_path.len() > 0 {
-                    self.dest_button.set_text(&data.dest_path);
+            },
+            Err(err) => {
+                match err.kind() {
+                    std::io::ErrorKind::NotFound => { println!("No config file found"); },
+                    std::io::ErrorKind::PermissionDenied => { nwg::modal_error_message(&self.window, "Config file error", "Unable to open config file. Permission was denied."); },
+                    e => { nwg::modal_error_message(&self.window, "Config file error", format!("An unusual error occured trying to open config file. {:?}", e).as_str()); },
                 }
             }
-        } else {
-            println!("Unable to open file {}", DATA_FILE)
         }
     }
 
@@ -133,6 +193,14 @@ impl SavegameManagerApp {
             }
         }
     }
+
+    fn checkbox_click(&self) {
+        let mut data = self.data.borrow_mut();
+        data.disable_screenshots = match self.screenshots_check.check_state() {
+            nwg::CheckBoxState::Unchecked => true,
+            _ => false,
+        }
+    }
 }
 
 use time;
@@ -159,14 +227,14 @@ impl SavegameListView {
             list_builder: nwg::ListView::builder()
                 .list_style(nwg::ListViewStyle::Detailed)
                 .flags(nwg::ListViewFlags::VISIBLE | nwg::ListViewFlags::SINGLE_SELECTION | nwg::ListViewFlags::ALWAYS_SHOW_SELECTION)
-                .ex_flags(nwg::ListViewExFlags::FULL_ROW_SELECT | nwg::ListViewExFlags::GRID)
+                .ex_flags(nwg::ListViewExFlags::FULL_ROW_SELECT | nwg::ListViewExFlags::GRID | nwg::ListViewExFlags::AUTO_COLUMN_SIZE)
         }
     }
 
     fn prepare_list(&self) {
-        self.base.insert_column(nwg::InsertListViewColumn { index: Some(0), fmt: Some(nwg::ListViewColumnFlags::LEFT), width: Some(100), text: Some("Name".to_owned()) });
-        self.base.insert_column(nwg::InsertListViewColumn { index: Some(1), fmt: Some(nwg::ListViewColumnFlags::LEFT), width: Some(100), text: Some("Date".to_owned()) });
-        self.base.insert_column(nwg::InsertListViewColumn { index: Some(2), fmt: Some(nwg::ListViewColumnFlags::LEFT), width: Some(100), text: Some("Checksum".to_owned()) });
+        self.base.insert_column(nwg::InsertListViewColumn { index: Some(0), fmt: Some(nwg::ListViewColumnFlags::LEFT), width: Some(300), text: Some("Name".to_owned()) });
+        self.base.insert_column(nwg::InsertListViewColumn { index: Some(1), fmt: Some(nwg::ListViewColumnFlags::LEFT), width: Some(300), text: Some("Date".to_owned()) });
+        self.base.insert_column(nwg::InsertListViewColumn { index: Some(2), fmt: Some(nwg::ListViewColumnFlags::LEFT), width: Some(300), text: Some("Checksum".to_owned()) });
 
         let row = [
             nwg::InsertListViewItem { column_index: 0, index: Some(0), text: Some("Name".to_owned()), image: None },
