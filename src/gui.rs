@@ -3,7 +3,6 @@ use crate::backup::{SavegameMeta, look_for_backups, get_meta_for_backup};
 
 use std::{cell::RefCell, fs::File, sync::RwLock, path::{Path, PathBuf}};
 
-use nwg::InsertListViewColumn;
 use serde::{Deserialize, Serialize};
 use chrono::TimeZone;
 
@@ -14,6 +13,7 @@ use nwd::NwgUi;
 use nwg::{NativeUi, stretch::{geometry::{Size, Rect}, style::{Dimension as D, FlexDirection}}};
 
 const NO_PADDING: Rect<D> = Rect { start: D::Points(0.0), end: D::Points(0.0), top: D::Points(0.0), bottom: D::Points(0.0) };
+const PADDING_LEFT: Rect<D> = Rect { start: D::Points(5.0), end: D::Points(0.0), top: D::Points(0.0), bottom: D::Points(0.0) };
 const DATA_FILE: &str = "savegame_manager.json";
 
 pub static SRC_HAS_CHANGES: RwLock<bool> = RwLock::new(false);
@@ -31,6 +31,15 @@ struct SavegameManagerAppData {
 #[derive(Default, NwgUi)]
 pub struct SavegameManagerApp {
     data: RefCell<SavegameManagerAppData>,
+
+    #[nwg_resource(family: "Segoe UI Semibold", size: 16, weight: 400)]
+    font_bold: nwg::Font,
+
+    #[nwg_resource(family: "Courier New", size: 14, weight: 400)]
+    font_monospace: nwg::Font,
+
+    #[nwg_resource(source_bin: Some(include_bytes!("../assets/no_screenshot.png")), size: Some((295, 166)))]
+    no_screenshot: nwg::Bitmap,
 
     watcher_path: RefCell<Option<PathBuf>>,
     watcher: RefCell<Option<RecommendedWatcher>>,
@@ -70,6 +79,7 @@ pub struct SavegameManagerApp {
 
     #[nwg_layout(parent: dest_frame, flex_direction: FlexDirection::Row, padding: NO_PADDING)]
     dest_layout: nwg::FlexboxLayout,
+
     #[nwg_control(parent: dest_frame, text: "Backup:")]
     #[nwg_layout_item(layout: dest_layout, size: Size { width: D::Points(100.0), height: D::Auto })]
     dest_label: nwg::Label,
@@ -85,9 +95,54 @@ pub struct SavegameManagerApp {
     #[nwg_events(OnButtonClick: [SavegameManagerApp::checkbox_click])]
     screenshots_check: nwg::CheckBox,
 
-    #[nwg_control(parent: window)]
+
+    #[nwg_control(parent: window, flags: "VISIBLE")]
     #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Auto }, flex_grow: 1.0)]
+    savegame_frame: nwg::Frame,
+
+    #[nwg_layout(parent: savegame_frame, flex_direction: FlexDirection::Row, padding: NO_PADDING)]
+    savegame_layout: nwg::FlexboxLayout,
+
+    #[nwg_control(parent: savegame_frame)]
+    #[nwg_layout_item(layout: savegame_layout, size: Size { width: D::Auto, height: D::Auto }, flex_grow: 1.0)]
+    #[nwg_events(OnListViewItemChanged: [SavegameManagerApp::show_details])]
     savegame_list: SavegameListView,
+
+    #[nwg_control(parent: savegame_frame, flags: "VISIBLE")]
+    #[nwg_layout_item(layout: savegame_layout, size: Size { width: D::Points(300.0), height: D::Auto })]
+    savegame_detail_frame: nwg::Frame,
+
+    #[nwg_layout(parent: savegame_detail_frame,  flex_direction: FlexDirection::Column, padding: PADDING_LEFT)]
+    savegame_detail_layout: nwg::FlexboxLayout,
+
+    #[nwg_control(parent: savegame_detail_frame, text: "Name:", font: Some(&data.font_bold), v_align: nwg::VTextAlign::Bottom)]
+    #[nwg_layout_item(layout: savegame_detail_layout, size: Size { width: D::Auto, height: D::Points(20.0) })]
+    savegame_detail_name: nwg::Label,
+
+    #[nwg_control(parent: savegame_detail_frame, text: "-", v_align: nwg::VTextAlign::Top)]
+    #[nwg_layout_item(layout: savegame_detail_layout, size: Size { width: D::Auto, height: D::Points(20.0) })]
+    savegame_detail_name_content: nwg::Label,
+    
+    #[nwg_control(parent: savegame_detail_frame, text: "Date:", font: Some(&data.font_bold), v_align: nwg::VTextAlign::Bottom)]
+    #[nwg_layout_item(layout: savegame_detail_layout, size: Size { width: D::Auto, height: D::Points(20.0) })]
+    savegame_detail_date: nwg::Label,
+
+    #[nwg_control(parent: savegame_detail_frame, text: "-", v_align: nwg::VTextAlign::Top)]
+    #[nwg_layout_item(layout: savegame_detail_layout, size: Size { width: D::Auto, height: D::Points(20.0) })]
+    savegame_detail_date_content: nwg::Label,
+    
+    #[nwg_control(parent: savegame_detail_frame, text: "Checksums:", font: Some(&data.font_bold), v_align: nwg::VTextAlign::Bottom)]
+    #[nwg_layout_item(layout: savegame_detail_layout, size: Size { width: D::Auto, height: D::Points(20.0) })]
+    savegame_detail_checksums: nwg::Label,
+
+    #[nwg_control(parent: savegame_detail_frame, text: "\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n", font: Some(&data.font_monospace), v_align: nwg::VTextAlign::Top)]
+    #[nwg_layout_item(layout: savegame_detail_layout, size: Size { width: D::Auto, height: D::Auto }, flex_grow: 1.0)]
+    savegame_detail_checksums_content: nwg::Label,
+    
+    #[nwg_control(parent: savegame_detail_frame, bitmap: Some(&data.no_screenshot), size: (295, 166))]
+    #[nwg_layout_item(layout: savegame_detail_layout, size: Size { width: D::Points(295.0), height: D::Points(166.0) })]
+    #[nwg_events(OnImageFrameClick: [SavegameManagerApp::open_screenshot])]
+    savegame_detail_screenshot: nwg::ImageFrame,
 }
 
 
@@ -339,6 +394,44 @@ impl SavegameManagerApp {
         };
         data.has_changed = true;
     }
+
+    fn show_details(&self) {
+        match self.savegame_list.get_selected_savegame() {
+            Some(savegame) => {
+                self.savegame_detail_name_content.set_text(savegame.name.as_str());
+                self.savegame_detail_date_content.set_text(local_datetime_from_millis(savegame.date).format("%c").to_string().as_str());
+                self.savegame_detail_checksums_content.set_text(savegame.checksums.iter().map(|c| String::from(&format!("{}: {}", c.0, c.1)[..40])).collect::<Vec<String>>().join("\r\n").as_str());
+
+                let dst_path = PathBuf::from(self.data.borrow().dest_path.clone()).join(&savegame.name).join("screenshot.jpg");
+                if dst_path.exists() && dst_path.is_file() {
+                    let mut screenshot = nwg::Bitmap::default();
+                    nwg::Bitmap::builder()
+                        .source_file(Some(dst_path.to_str().unwrap_or_default()))
+                        .size(Some((295, 166)))
+                        .strict(false)
+                        .build(&mut screenshot).unwrap_or_default();
+                    self.savegame_detail_screenshot.set_bitmap(Some(&screenshot));
+                } else {
+                    self.savegame_detail_screenshot.set_bitmap(Some(&self.no_screenshot));
+                }
+            },
+            None => {
+                self.savegame_detail_name_content.set_text("-");
+                self.savegame_detail_date_content.set_text("-");
+                self.savegame_detail_checksums_content.set_text("-");
+                self.savegame_detail_screenshot.set_bitmap(Some(&self.no_screenshot));
+            }
+        }
+    }
+
+    fn open_screenshot(&self) {
+        if let Some(savegame) = self.savegame_list.get_selected_savegame() {
+            let dst_path = PathBuf::from(self.data.borrow().dest_path.clone()).join(&savegame.name).join("screenshot.jpg");
+            if dst_path.exists() && dst_path.is_file() {
+                let _ = opener::open(dst_path);
+            }
+        }
+    }
 }
 
 
@@ -349,6 +442,14 @@ struct SavegameListView {
 }
 
 nwg::subclass_control!(SavegameListView, ListView, base);
+
+fn local_datetime_from_millis(millis: i64) -> chrono::DateTime<chrono::Local> {
+    match chrono::Local.timestamp_millis_opt(millis) {
+        chrono::offset::LocalResult::Single(ts) => ts,
+        chrono::offset::LocalResult::Ambiguous(ts, _) => ts,
+        _ => chrono::Local::now(),
+    }
+}
 
 impl SavegameListView {
     fn builder() -> SavegameListViewBuilder {
@@ -363,12 +464,10 @@ impl SavegameListView {
     fn prepare_list(&self) {
         self.base.insert_column(nwg::InsertListViewColumn { index: Some(0), fmt: Some(nwg::ListViewColumnFlags::LEFT), width: Some(300), text: Some("Name".to_owned()) });
         self.base.insert_column(nwg::InsertListViewColumn { index: Some(1), fmt: Some(nwg::ListViewColumnFlags::LEFT), width: Some(300), text: Some("Date".to_owned()) });
-        self.base.insert_column(nwg::InsertListViewColumn { index: Some(2), fmt: Some(nwg::ListViewColumnFlags::LEFT), width: Some(300), text: Some("Checksum".to_owned()) });
 
         let row = [
             nwg::InsertListViewItem { column_index: 0, index: Some(0), text: Some("Name".to_owned()), image: None },
             nwg::InsertListViewItem { column_index: 1, index: Some(0), text: Some("Date".to_owned()), image: None },
-            nwg::InsertListViewItem { column_index: 2, index: Some(0), text: Some("Checksum".to_owned()), image: None },
         ];
         self.base.insert_items(&row);
     }
@@ -392,21 +491,15 @@ impl SavegameListView {
 
         let index = data.len();
 
-        let save_timestamp = match chrono::Local.timestamp_millis_opt(meta.date) {
-            chrono::offset::LocalResult::Single(ts) => ts,
-            chrono::offset::LocalResult::Ambiguous(ts, _) => ts,
-            _ => chrono::Local::now(),
-        };
+        let save_timestamp = local_datetime_from_millis(meta.date);
 
         let row = [
             nwg::InsertListViewItem { column_index: 0, index: Some(index as i32), text: Some(meta.name), image: None },
             nwg::InsertListViewItem { column_index: 1, index: Some(index as i32), text: Some(save_timestamp.format("%c").to_string()), image: None },
-            nwg::InsertListViewItem { column_index: 2, index: Some(index as i32), text: Some(meta.checksums.iter().map(|cs| format!("{}: {}", cs.0, cs.1)).collect::<Vec<String>>().join(", ")), image: None },
         ];
 
         self.base.insert_item(row[0].clone());
         self.base.update_item(index, row[1].clone());
-        self.base.update_item(index, row[2].clone());
     }
 
     fn unshift_savegame(&self, meta: SavegameMeta) {
@@ -429,15 +522,10 @@ impl SavegameListView {
 
         let mut index = 1;
         for row in &*data {
-            let save_timestamp = match chrono::Local.timestamp_millis_opt(row.date) {
-                chrono::offset::LocalResult::Single(ts) => ts,
-                chrono::offset::LocalResult::Ambiguous(ts, _) => ts,
-                _ => chrono::Local::now(),
-            };
+            let save_timestamp = local_datetime_from_millis(row.date);
 
             self.base.update_item(index, nwg::InsertListViewItem { column_index: 0, index: Some(index as i32), text: Some(row.name.clone()), image: None });
             self.base.update_item(index, nwg::InsertListViewItem { column_index: 1, index: Some(index as i32), text: Some(save_timestamp.format("%c").to_string()), image: None });
-            self.base.update_item(index, nwg::InsertListViewItem { column_index: 2, index: Some(index as i32), text: Some(row.checksums.iter().map(|cs| format!("{}: {}", cs.0, cs.1)).collect::<Vec<String>>().join(", ")), image: None });
 
             index += 1;
         }
@@ -450,6 +538,16 @@ impl SavegameListView {
         data.remove(index);
 
         self.base.remove_item(index + 1);
+    }
+
+    fn get_selected_savegame(&self) -> Option<SavegameMeta> {
+        let index = self.base.selected_item().unwrap_or_default();
+        if index > 0 {
+            let data = self.data.borrow();
+            Some(data[index as usize - 1].clone())
+        } else {
+            None
+        }
     }
 }
 
@@ -477,7 +575,7 @@ pub fn start_app() {
     nwg::Font::builder()
         .family("Segoe UI")
         .size(16)
-        .weight(300)
+        .weight(400)
         .build(&mut font).expect("Failed to build default font");
     nwg::Font::set_global_default(Some(font));
     let app = SavegameManagerApp::build_ui(Default::default()).expect("Failed to build ui");
