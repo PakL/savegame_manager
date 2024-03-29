@@ -1,11 +1,10 @@
 use crate::*;
 use crate::backup::{SavegameMeta, look_for_backups, get_meta_for_backup};
 
-use std::{cell::RefCell, fs::File, sync::RwLock, path::{Path, PathBuf}};
+use std::{cell::RefCell, fs::File, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use notify::{RecommendedWatcher, Watcher};
 use native_windows_gui as nwg;
 use native_windows_derive as nwd;
 use nwd::NwgUi;
@@ -15,8 +14,6 @@ const NO_PADDING: Rect<D> = Rect { start: D::Points(0.0), end: D::Points(0.0), t
 const PADDING_LEFT: Rect<D> = Rect { start: D::Points(5.0), end: D::Points(0.0), top: D::Points(0.0), bottom: D::Points(0.0) };
 const DATA_FILE: &str = "savegame_manager.json";
 
-pub static SRC_HAS_CHANGES: RwLock<bool> = RwLock::new(false);
-pub static SRC_LATEST_CHANGE: RwLock<i64> = RwLock::new(0);
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -40,9 +37,6 @@ pub struct SavegameManagerApp {
     #[nwg_resource(source_bin: Some(include_bytes!("../assets/no_screenshot.png")), size: Some((295, 166)))]
     no_screenshot: nwg::Bitmap,
 
-    watcher_path: RefCell<Option<PathBuf>>,
-    watcher: RefCell<Option<RecommendedWatcher>>,
-
     #[nwg_control(size: (800, 600), title: "Savegame Manager", flags: "MAIN_WINDOW")]
     #[nwg_events( OnWindowClose: [SavegameManagerApp::exit] )]
     window: nwg::Window,
@@ -54,7 +48,7 @@ pub struct SavegameManagerApp {
     #[nwg_layout(parent: window, flex_direction: FlexDirection::Column)]
     layout: nwg::FlexboxLayout,
 
-    // Source folder selection
+// region: Source folder selection
     #[nwg_control(parent: window, flags: "VISIBLE")]
     #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Points(25.0) })]
     source_frame: nwg::Frame,
@@ -70,8 +64,9 @@ pub struct SavegameManagerApp {
     #[nwg_layout_item(layout: source_layout, size: Size { width: D::Auto, height: D::Auto }, flex_grow: 1.0)]
     #[nwg_events(OnButtonClick: [SavegameManagerApp::select_folder(SELF, CTRL)])]
     source_button: nwg::Button,
+// endregion
 
-    // Destination folder selection
+// region: Destination folder selection
     #[nwg_control(parent: window, flags: "VISIBLE")]
     #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Points(25.0) })]
     dest_frame: nwg::Frame,
@@ -87,7 +82,7 @@ pub struct SavegameManagerApp {
     #[nwg_layout_item(layout: dest_layout, size: Size { width: D::Auto, height: D::Auto }, flex_grow: 1.0)]
     #[nwg_events(OnButtonClick: [SavegameManagerApp::select_folder(SELF, CTRL)])]
     dest_button: nwg::Button,
-
+// endregion
 
     #[nwg_control(parent: window, text: "Make screenshots when creating backup", check_state: nwg::CheckBoxState::Checked)]
     #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Points(25.0) })]
@@ -107,6 +102,7 @@ pub struct SavegameManagerApp {
     #[nwg_events(OnListViewItemChanged: [SavegameManagerApp::show_details], OnKeyRelease: [SavegameManagerApp::key_released(SELF, EVT_DATA)])]
     savegame_list: SavegameListView,
 
+// region: Savegame details
     #[nwg_control(parent: savegame_frame, flags: "VISIBLE")]
     #[nwg_layout_item(layout: savegame_layout, size: Size { width: D::Points(300.0), height: D::Auto })]
     savegame_detail_frame: nwg::Frame,
@@ -134,9 +130,9 @@ pub struct SavegameManagerApp {
     #[nwg_layout_item(layout: savegame_detail_layout, size: Size { width: D::Auto, height: D::Points(20.0) })]
     savegame_detail_checksums: nwg::Label,
 
-    #[nwg_control(parent: savegame_detail_frame, text: "-", font: Some(&data.font_monospace), v_align: nwg::VTextAlign::Top)]
+    #[nwg_control(parent: savegame_detail_frame, text: "-", font: Some(&data.font_monospace), flags: "VISIBLE|MULTI_LINE")]
     #[nwg_layout_item(layout: savegame_detail_layout, size: Size { width: D::Auto, height: D::Auto }, flex_grow: 1.0)]
-    savegame_detail_checksums_content: nwg::Label,
+    savegame_detail_checksums_content: nwg::RichLabel,
     
     #[nwg_control(parent: savegame_detail_frame, bitmap: Some(&data.no_screenshot))]
     #[nwg_layout_item(layout: savegame_detail_layout, size: Size { width: D::Points(295.0), height: D::Points(166.0) })]
@@ -164,36 +160,10 @@ pub struct SavegameManagerApp {
     #[nwg_layout_item(layout: savegame_btns_layout, row: 0, col: 2)]
     #[nwg_events(OnButtonClick: [SavegameManagerApp::delete_click])]
     savegame_delete: nwg::Button,
+// endregion
 }
 
 
-struct SavegameSourceWatchEventHandler;
-
-impl notify::EventHandler for SavegameSourceWatchEventHandler {
-    fn handle_event(&mut self, event: notify::Result<notify::Event>) {
-        println!("File event: {:?}", event);
-        if let Ok(ev) = event {
-            let mut only_folders = true;
-            for path in ev.paths {
-                if path.is_file() {
-                    only_folders = false;
-                    break;
-                }
-            }
-            if only_folders {
-                return;
-            }
-
-            let changes_read = read_rwlock_or(&SRC_HAS_CHANGES, false);
-            if !changes_read {
-                write_to_rwlock(&SRC_HAS_CHANGES, true);
-                write_to_rwlock(&SCREENSHOT_STATE, 0);
-            }
-
-            write_to_rwlock(&SRC_LATEST_CHANGE, chrono::Utc::now().timestamp_millis());
-        }
-    }
-}
 
 impl SavegameManagerApp {
     fn exit(&self) {
@@ -210,28 +180,9 @@ impl SavegameManagerApp {
 
     fn start_watcher(&self) {
         let data = self.data.borrow();
-        let src_path = Path::new(data.source_path.as_str());
-        let dst_path = Path::new(data.dest_path.as_str());
 
-        let mut current_path = self.watcher_path.borrow_mut();
-        let mut watcher = self.watcher.borrow_mut();
-
-        if let Some(current_path_path) = current_path.as_ref() {
-            if let Some(rec_watch) = watcher.as_mut() {
-                rec_watch.unwatch(current_path_path).unwrap_or_default();
-            }
-        }
-
-        if data.source_path.len() > 0 && data.dest_path.len() > 0 && src_path.exists() && dst_path.exists() && src_path.is_dir() && dst_path.is_dir() {
-            let rec_watch_result = notify::recommended_watcher(SavegameSourceWatchEventHandler);
-            if let Ok(mut rec_watch) = rec_watch_result {
-                rec_watch.watch(src_path, notify::RecursiveMode::NonRecursive).unwrap_or_default();
-                *watcher = Some(rec_watch);
-                *current_path = Some(src_path.to_owned());
-            } else {
-                *watcher = None;
-                *current_path = None;
-            }
+        if !crate::watcher::start_watcher(&data.source_path, &data.dest_path) {
+            nwg::modal_error_message(&self.window, "Watcher error", "Could not start folder monitoring");
         }
     }
 
@@ -283,14 +234,14 @@ impl SavegameManagerApp {
 
         println!("Finishing up");
         write_to_rwlock(&BACKUP_STATE, 0);
-        write_to_rwlock(&SRC_HAS_CHANGES, false);
+        write_to_rwlock(&WATCHER_HAS_CHANGES, false);
     }
 
     fn tick_backup(&self, wait_for_screenshot: bool) {
         match read_rwlock_or(&BACKUP_STATE, 0) {
             0 => {
                 let now = chrono::Utc::now().timestamp_millis();
-                let last_change = read_rwlock_or(&SRC_LATEST_CHANGE, now);
+                let last_change = read_rwlock_or(&WATCHER_LATEST_CHANGE, now);
                 if now - last_change > 1_000 && !wait_for_screenshot {
                     println!("Creating backup");
                     write_to_rwlock(&BACKUP_STATE, 1);
@@ -308,7 +259,7 @@ impl SavegameManagerApp {
     }
 
     fn timer_tick(&self) {
-        let changes = read_rwlock_or(&SRC_HAS_CHANGES, false);
+        let changes = read_rwlock_or(&WATCHER_HAS_CHANGES, false);
         if changes {
             self.tick_backup(self.tick_screenshot());
         }
@@ -503,6 +454,7 @@ impl SavegameManagerApp {
     }
 
     fn load_click(&self) {
+        write_to_rwlock(&WATCHER_PAUSED, true);
         if let Some(savegame) = self.savegame_list.get_selected_savegame() {
             let src_path = self.data.borrow().source_path.clone();
             let dst_path = self.data.borrow().dest_path.clone();
@@ -514,6 +466,7 @@ impl SavegameManagerApp {
         }
 
         self.refresh_backup_list();
+        write_to_rwlock(&WATCHER_PAUSED, false);
     }
 
     fn rename_click(&self) {

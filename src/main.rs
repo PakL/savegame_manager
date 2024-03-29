@@ -10,12 +10,14 @@
 mod utils;
 mod screenshot;
 mod backup;
+mod watcher;
 mod gui;
 
 
 pub use utils::*;
 pub use screenshot::{SCREENSHOT_STATE, SCREENSHOT_ERROR};
 pub use backup::{BACKUP_STATE, BACKUP_ERROR, BACKUP_NAME};
+pub use watcher::{WATCHER_HAS_CHANGES, WATCHER_LATEST_CHANGE, WATCHER_PAUSED};
 
 fn main() {
     gui::start_app();

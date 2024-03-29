@@ -82,9 +82,9 @@ pub fn create_backup(src_path: &String, dst_path: &String, copy_screenshot: &boo
 pub fn get_meta_for_backup(dst_path: &String, backup_name: &String) -> Result<SavegameMeta, anyhow::Error> {
     let bak_pathbuf = PathBuf::from(dst_path).join(backup_name);
     
-    if bak_pathbuf.is_dir() {
+    if bak_pathbuf.exists() && bak_pathbuf.is_dir() {
         let meta_file_path = bak_pathbuf.join("meta.json");
-        if meta_file_path.exists() {
+        if meta_file_path.exists() && meta_file_path.is_file() {
             let meta_file = File::open(meta_file_path)?;
             let mut meta: SavegameMeta = serde_json::from_reader(meta_file)?;
             meta.name = backup_name.clone();
@@ -111,7 +111,11 @@ pub fn look_for_backups(dst_path: &String) -> Result<Vec<SavegameMeta>, anyhow::
 
         match get_meta_for_backup(dst_path, &backup_name) {
             Ok(meta) => backups.push(meta),
-            Err(err) => println!("Error reading backup meta for {}: {:?}", backup_name, err),
+            Err(err) => {
+                if PathBuf::from(dst_path).join(&backup_name).is_dir() {
+                    println!("Error reading backup meta for {}: {:?}", backup_name, err)
+                }
+            },
         }
     }
 
@@ -159,6 +163,10 @@ pub fn hash_list_cmp(hashes: &Vec<(String, String)>, cmp_with: &Vec<(String, Str
 }
 
 pub fn load_backup(src_path: &String, dst_path: &String, backup: &SavegameMeta) -> Result<(), anyhow::Error> {
+    if !read_rwlock_or(&crate::WATCHER_PAUSED, false) {
+        return Err(anyhow::anyhow!("Cannot load backup while watcher is running"));
+    }
+
     let hash_list = create_hash_list(src_path);
     if !hash_list_cmp(&backup.checksums, &hash_list) {
         for (file, _) in &hash_list {
