@@ -1,5 +1,3 @@
-use std::cell::RefCell;
-
 use native_windows_gui as nwg;
 use native_windows_derive as nwd;
 
@@ -89,16 +87,27 @@ impl SavegameManagerApp {
     }
 }
 
+use std::cell::RefCell;
+use serde::{Deserialize, Serialize};
+use time;
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct SavegameMeta {
+    name: String,
+    date: i64,
+    checksums: Vec<(String, String)>,
+
+}
+
 #[derive(Default)]
 struct SavegameListView {
     base: nwg::ListView,
-    // data: RefCell<Vec<(String, String, String, String, String)>>,
+    data: RefCell<Vec<SavegameMeta>>,
 }
 
 nwg::subclass_control!(SavegameListView, ListView, base);
 
 impl SavegameListView {
-
     fn builder() -> SavegameListViewBuilder {
         SavegameListViewBuilder {
             list_builder: nwg::ListView::builder()
@@ -108,6 +117,40 @@ impl SavegameListView {
         }
     }
 
+    fn prepare_list(&self) {
+        self.base.insert_column(nwg::InsertListViewColumn { index: Some(0), fmt: Some(nwg::ListViewColumnFlags::LEFT), width: Some(100), text: Some("Name".to_owned()) });
+        self.base.insert_column(nwg::InsertListViewColumn { index: Some(1), fmt: Some(nwg::ListViewColumnFlags::LEFT), width: Some(100), text: Some("Date".to_owned()) });
+        self.base.insert_column(nwg::InsertListViewColumn { index: Some(2), fmt: Some(nwg::ListViewColumnFlags::LEFT), width: Some(100), text: Some("Checksum".to_owned()) });
+
+        let row = [
+            nwg::InsertListViewItem { column_index: 0, index: Some(0), text: Some("Name".to_owned()), image: None },
+            nwg::InsertListViewItem { column_index: 1, index: Some(0), text: Some("Date".to_owned()), image: None },
+            nwg::InsertListViewItem { column_index: 2, index: Some(0), text: Some("Checksum".to_owned()), image: None },
+        ];
+        self.base.insert_items(&row);
+    }
+
+    fn add_savegame(&self, meta: SavegameMeta) {
+        let mut data = self.data.borrow_mut();
+        data.push(meta.clone());
+        
+        let index: i32 = data.len() as i32;
+
+        let save_timestamp = time::OffsetDateTime::from_unix_timestamp(meta.date).unwrap_or(time::OffsetDateTime::now_utc());
+        let row = [
+            nwg::InsertListViewItem { column_index: 0, index: Some(index), text: Some(meta.name), image: None },
+            nwg::InsertListViewItem { column_index: 1, index: Some(index), text: Some(save_timestamp.format(&time::format_description::well_known::Rfc2822).unwrap_or_default()), image: None },
+            nwg::InsertListViewItem { column_index: 2, index: Some(index), text: Some(meta.checksums.iter().map(|cs| format!("{}: {}", cs.0, cs.1)).collect::<Vec<String>>().join(", ")), image: None },
+        ];
+        self.base.insert_items(&row);
+    }
+
+    fn remove_savegame(&self, index: usize) {
+        let mut data = self.data.borrow_mut();
+        data.remove(index);
+
+        self.base.remove_item(index + 1);
+    }
 }
 
 struct SavegameListViewBuilder {
@@ -122,7 +165,7 @@ impl SavegameListViewBuilder {
 
     pub fn build(self, list: &mut SavegameListView) -> Result<(), nwg::NwgError> {
         self.list_builder.build(&mut list.base)?;
-        list.base.insert_column(nwg::InsertListViewColumn { index: Some(0), fmt: Some(nwg::ListViewColumnFlags::LEFT), width: Some(300), text: Some("".to_owned()) });
+        list.prepare_list();
         Ok(())
     }
 }
