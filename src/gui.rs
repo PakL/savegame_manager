@@ -1,29 +1,27 @@
-use std::cell::RefCell;
-use std::fs::File;
-use std::sync::RwLock;
-use std::path::{Path, PathBuf};
+use crate::*;
+use crate::backup::{SavegameMeta, look_for_backups, get_meta_for_backup};
 
-use screenshots::{ Screen, display_info::DisplayInfo, image::ImageFormat };
-use notify::{RecommendedWatcher, Watcher};
-
-use native_windows_gui as nwg;
-use native_windows_derive as nwd;
-
-use nwd::NwgUi;
-use nwg::NativeUi;
-use nwg::stretch::{ geometry::{ Size, Rect }, style:: { Dimension as D, FlexDirection } };
+use std::{cell::RefCell, fs::File, sync::RwLock, path::{Path, PathBuf}};
 
 use serde::{Deserialize, Serialize};
+use chrono::TimeZone;
+
+use notify::{RecommendedWatcher, Watcher};
+use native_windows_gui as nwg;
+use native_windows_derive as nwd;
+use nwd::NwgUi;
+use nwg::{NativeUi, stretch::{geometry::{Size, Rect}, style::{Dimension as D, FlexDirection}}};
 
 const NO_PADDING: Rect<D> = Rect { start: D::Points(0.0), end: D::Points(0.0), top: D::Points(0.0), bottom: D::Points(0.0) };
 const DATA_FILE: &str = "savegame_manager.json";
 
-static SRC_HAS_CHANGES: RwLock<bool> = RwLock::new(false);
-static SRC_LATEST_CHANGE: RwLock<i64> = RwLock::new(0);
+pub static SRC_HAS_CHANGES: RwLock<bool> = RwLock::new(false);
+pub static SRC_LATEST_CHANGE: RwLock<i64> = RwLock::new(0);
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 struct SavegameManagerAppData {
+    #[serde(skip)] has_changed: bool,
     source_path: String,
     dest_path: String,
     disable_screenshots: bool,
@@ -32,7 +30,6 @@ struct SavegameManagerAppData {
 #[derive(Default, NwgUi)]
 pub struct SavegameManagerApp {
     data: RefCell<SavegameManagerAppData>,
-    display_info: RefCell<Option<Screen>>,
 
     watcher_path: RefCell<Option<PathBuf>>,
     watcher: RefCell<Option<RecommendedWatcher>>,
@@ -41,7 +38,7 @@ pub struct SavegameManagerApp {
     #[nwg_events( OnWindowClose: [SavegameManagerApp::exit] )]
     window: nwg::Window,
 
-    #[nwg_control(parent: window, interval: std::time::Duration::from_millis(500), active: true)]
+    #[nwg_control(parent: window, interval: std::time::Duration::from_millis(500), max_tick: Some(1), active: true)]
     #[nwg_events(OnTimerTick: [SavegameManagerApp::timer_tick])]
     timer: nwg::AnimationTimer,
 
@@ -92,19 +89,31 @@ pub struct SavegameManagerApp {
     savegame_list: SavegameListView,
 }
 
+
 struct SavegameSourceWatchEventHandler;
 
 impl notify::EventHandler for SavegameSourceWatchEventHandler {
     fn handle_event(&mut self, event: notify::Result<notify::Event>) {
-        if let Ok(_) = event {
-            let changes_read = { SRC_HAS_CHANGES.read().unwrap().clone() };
-            if !changes_read {
-                let mut changes = SRC_HAS_CHANGES.write().unwrap();
-                *changes = true;
+        println!("File event: {:?}", event);
+        if let Ok(ev) = event {
+            let mut only_folders = true;
+            for path in ev.paths {
+                if path.is_file() {
+                    only_folders = false;
+                    break;
+                }
+            }
+            if only_folders {
+                return;
             }
 
-            let mut last_change = SRC_LATEST_CHANGE.write().unwrap();
-            *last_change = time::OffsetDateTime::now_utc().unix_timestamp();
+            let changes_read = read_rwlock_or(&SRC_HAS_CHANGES, false);
+            if !changes_read {
+                write_to_rwlock(&SRC_HAS_CHANGES, true);
+                write_to_rwlock(&SCREENSHOT_STATE, 0);
+            }
+
+            write_to_rwlock(&SRC_LATEST_CHANGE, chrono::Utc::now().timestamp_millis());
         }
     }
 }
@@ -147,24 +156,86 @@ impl SavegameManagerApp {
     }
 
     fn timer_tick(&self) {
-        let changes = { SRC_HAS_CHANGES.read().unwrap().clone() };
+        let changes = read_rwlock_or(&SRC_HAS_CHANGES, false);
         if changes {
-            let last_change = { SRC_LATEST_CHANGE.read().unwrap().clone() };
-            let now = time::OffsetDateTime::now_utc().unix_timestamp();
-            if now - last_change > 3 {
-                println!("Changes detected, making backup");
-                let mut changes = SRC_HAS_CHANGES.write().unwrap();
-                *changes = false;
+            let mut wait_for_screenshot = false;
+            if !self.data.borrow().disable_screenshots {
+                let state = read_rwlock_or(&SCREENSHOT_STATE, 0);
+                match state {
+                    0 => {
+                        println!("Taking screenshot");
+                        write_to_rwlock(&SCREENSHOT_STATE, 1);
+                        std::thread::spawn(super::screenshot::create_screenshot);
+                        wait_for_screenshot = true;
+                    },
+                    1 => {
+                        wait_for_screenshot = true;
+                    },
+                    3 => {
+                        let error = read_rwlock_or(&SCREENSHOT_ERROR, "Unknown error occured while taking screenshot");
+                        nwg::modal_error_message(&self.window.handle, "Screenshot error", error);
+                    },
+                    _ => {},
+                }
+            }
 
-                self.create_screenshot();
+            match read_rwlock_or(&BACKUP_STATE, 0) {
+                0 => {
+                    let now = chrono::Utc::now().timestamp_millis();
+                    let last_change = read_rwlock_or(&SRC_LATEST_CHANGE, now);
+                    if now - last_change > 1_000 && !wait_for_screenshot {
+                        println!("Creating backup");
+                        write_to_rwlock(&BACKUP_STATE, 1);
+                        let src_path = self.data.borrow().source_path.clone();
+                        let dst_path = self.data.borrow().dest_path.clone();
+                        let copy_screenshot = !self.data.borrow().disable_screenshots;
+                        std::thread::spawn(move || super::backup::create_backup(&src_path, &dst_path, &copy_screenshot));
+                    }
+                },
+                1 => {},
+                _ => {
+                    let error = read_rwlock_or(&BACKUP_ERROR, String::new());
+                    if error.len() > 0 {
+                        nwg::modal_error_message(&self.window.handle, "Backup error", error.as_str());
+                    } else {
+                        let backup_name = read_rwlock_or(&BACKUP_NAME, String::new());
+                        if backup_name.len() > 0 {
+                            let dst_path = self.data.borrow().dest_path.clone();
+                            match get_meta_for_backup(&dst_path, &backup_name) {
+                                Ok(meta) => {
+                                    self.savegame_list.add_savegame(meta);
+                                },
+                                Err(err) => {
+                                    nwg::modal_error_message(&self.window, "Backup error", format!("Error reading backup meta: {:?}", err).as_str());
+                                }
+                            }
+                        }
+                    }
+
+                    println!("Finishing up");
+                    write_to_rwlock(&BACKUP_STATE, 0);
+                    write_to_rwlock(&SRC_HAS_CHANGES, false);
+                }
             }
         }
+
+        self.timer.start();
     }
 
-    fn create_screenshot(&self) {
-        let display_info = self.display_info.borrow();
-        if let Some(screen) = display_info.as_ref() {
-            screen.capture().unwrap_or_default().save_with_format("screenshot.jpg", ImageFormat::Jpeg).unwrap_or_default();
+    fn refresh_backup_list(&self) {
+        let dst_path = self.data.borrow().dest_path.clone();
+        match look_for_backups(&dst_path) {
+            Ok(backups) => {
+                self.savegame_list.clear_list();
+                self.savegame_list.set_redraw(false);
+                for backup in backups {
+                    self.savegame_list.add_savegame(backup);
+                }
+                self.savegame_list.set_redraw(true);
+            },
+            Err(err) => {
+                nwg::modal_error_message(&self.window, "Backup error", format!("Error reading backups: {:?}", err).as_str());
+            }
         }
     }
 
@@ -198,14 +269,9 @@ impl SavegameManagerApp {
             }
         }
 
-        let screens = DisplayInfo::all().unwrap_or_default();
-        for screen in screens {
-            if screen.is_primary {
-                let mut display_info = self.display_info.borrow_mut();
-                *display_info = Some(Screen::new(&screen));
-                break;
-            }
-        }
+        drop(data);
+        self.refresh_backup_list();
+
     }
 
     fn open_dialog(title: &str, handle: &nwg::ControlHandle) -> Result<nwg::FileDialog, nwg::NwgError> {
@@ -237,6 +303,13 @@ impl SavegameManagerApp {
                         } else {
                             data.dest_path = path_string;
                         }
+                        drop(data);
+
+                        if button == &self.source_button {
+                            self.start_watcher();
+                        } else {
+                            self.refresh_backup_list();
+                        }
                     }
                 Err(_) => {}
             }
@@ -252,17 +325,7 @@ impl SavegameManagerApp {
     }
 }
 
-use time;
 
-#[derive(Clone, Default, Serialize, Deserialize)]
-struct SavegameMeta {
-    name: String,
-    date: i64,
-    checksums: Vec<(String, String)>,
-
-}
-
-#[allow(dead_code)]
 #[derive(Default)]
 struct SavegameListView {
     base: nwg::ListView,
@@ -294,23 +357,43 @@ impl SavegameListView {
         self.base.insert_items(&row);
     }
 
-    #[allow(dead_code)]
+    fn clear_list(&self) {
+        self.base.set_redraw(false);
+
+        let data = self.data.borrow();
+        let data_len = data.len();
+        drop(data);
+        for _ in 0..data_len {
+            self.remove_savegame(0);
+        }
+
+        self.base.set_redraw(true);
+    }
+
     fn add_savegame(&self, meta: SavegameMeta) {
         let mut data = self.data.borrow_mut();
         data.push(meta.clone());
 
-        let index: i32 = data.len() as i32;
+        let index = data.len();
+        println!("index: {}", index);
 
-        let save_timestamp = time::OffsetDateTime::from_unix_timestamp(meta.date).unwrap_or(time::OffsetDateTime::now_utc());
+        let save_timestamp = match chrono::Local.timestamp_millis_opt(meta.date) {
+            chrono::offset::LocalResult::Single(ts) => ts,
+            chrono::offset::LocalResult::Ambiguous(ts, _) => ts,
+            _ => chrono::Local::now(),
+        };
+
         let row = [
-            nwg::InsertListViewItem { column_index: 0, index: Some(index), text: Some(meta.name), image: None },
-            nwg::InsertListViewItem { column_index: 1, index: Some(index), text: Some(save_timestamp.format(&time::format_description::well_known::Rfc2822).unwrap_or_default()), image: None },
-            nwg::InsertListViewItem { column_index: 2, index: Some(index), text: Some(meta.checksums.iter().map(|cs| format!("{}: {}", cs.0, cs.1)).collect::<Vec<String>>().join(", ")), image: None },
+            nwg::InsertListViewItem { column_index: 0, index: Some(index as i32), text: Some(meta.name), image: None },
+            nwg::InsertListViewItem { column_index: 1, index: Some(index as i32), text: Some(save_timestamp.format("%c").to_string()), image: None },
+            nwg::InsertListViewItem { column_index: 2, index: Some(index as i32), text: Some(meta.checksums.iter().map(|cs| format!("{}: {}", cs.0, cs.1)).collect::<Vec<String>>().join(", ")), image: None },
         ];
-        self.base.insert_items(&row);
+
+        self.base.insert_item(row[0].clone());
+        self.base.update_item(index, row[1].clone());
+        self.base.update_item(index, row[2].clone());
     }
 
-    #[allow(dead_code)]
     fn remove_savegame(&self, index: usize) {
         let mut data = self.data.borrow_mut();
         data.remove(index);
