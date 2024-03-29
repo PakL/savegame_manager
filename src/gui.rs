@@ -3,6 +3,7 @@ use std::fs::File;
 use std::sync::RwLock;
 use std::path::{Path, PathBuf};
 
+use screenshots::{ Screen, display_info::DisplayInfo, image::ImageFormat };
 use notify::{RecommendedWatcher, Watcher};
 
 use native_windows_gui as nwg;
@@ -31,6 +32,7 @@ struct SavegameManagerAppData {
 #[derive(Default, NwgUi)]
 pub struct SavegameManagerApp {
     data: RefCell<SavegameManagerAppData>,
+    display_info: RefCell<Option<Screen>>,
 
     watcher_path: RefCell<Option<PathBuf>>,
     watcher: RefCell<Option<RecommendedWatcher>>,
@@ -153,7 +155,16 @@ impl SavegameManagerApp {
                 println!("Changes detected, making backup");
                 let mut changes = SRC_HAS_CHANGES.write().unwrap();
                 *changes = false;
+
+                self.create_screenshot();
             }
+        }
+    }
+
+    fn create_screenshot(&self) {
+        let display_info = self.display_info.borrow();
+        if let Some(screen) = display_info.as_ref() {
+            screen.capture().unwrap_or_default().save_with_format("screenshot.jpg", ImageFormat::Jpeg).unwrap_or_default();
         }
     }
 
@@ -184,6 +195,15 @@ impl SavegameManagerApp {
                     std::io::ErrorKind::PermissionDenied => { nwg::modal_error_message(&self.window, "Config file error", "Unable to open config file. Permission was denied."); },
                     e => { nwg::modal_error_message(&self.window, "Config file error", format!("An unusual error occured trying to open config file. {:?}", e).as_str()); },
                 }
+            }
+        }
+
+        let screens = DisplayInfo::all().unwrap_or_default();
+        for screen in screens {
+            if screen.is_primary {
+                let mut display_info = self.display_info.borrow_mut();
+                *display_info = Some(Screen::new(&screen));
+                break;
             }
         }
     }
