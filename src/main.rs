@@ -1,7 +1,7 @@
 // #![windows_subsystem = "windows"]
 
-mod gui;
+use savegame_manager::gui;
 
 fn main() {
-    gui::start_app()
+    gui::start_app();
 }

@@ -19,23 +19,34 @@ pub struct SavegameManagerApp {
     #[nwg_layout(parent: window, flex_direction: FlexDirection::Column)]
     layout: nwg::FlexboxLayout,
 
-    #[nwg_control(flags: "VISIBLE")]
+    #[nwg_control(parent: window, flags: "VISIBLE")]
     #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Points(25.0) })]
     source_frame: nwg::Frame,
+    
+    #[nwg_layout(parent: source_frame, flex_direction: FlexDirection::Row, padding: NO_PADDING)]
+    source_layout: nwg::FlexboxLayout,
 
-    #[nwg_partial(parent: source_frame)]
-    #[nwg_events((button, OnButtonClick): [SavegameManagerApp::select_source_folder])]
-    source: FolderSelectRow,
+    #[nwg_control(parent: source_frame, text: "Source:")]
+    #[nwg_layout_item(layout: source_layout, size: Size { width: D::Points(100.0), height: D::Auto })]
+    source_label: nwg::Label,
+    #[nwg_control(parent: source_frame, text: "Select source folder")]
+    #[nwg_layout_item(layout: source_layout, size: Size { width: D::Auto, height: D::Auto }, flex_grow: 1.0)]
+    #[nwg_events(OnButtonClick: [SavegameManagerApp::select_folder(SELF, CTRL)])]
+    source_button: nwg::Button,
 
-    #[nwg_control(flags: "VISIBLE")]
+    // #[nwg_partial(parent: source_frame)]
+    // #[nwg_events((button, OnButtonClick): [SavegameManagerApp::select_folder(SELF, "Select source folder", FolderSelectRow::Source)])]
+    // source: FolderSelectRowPartial,
+
+    #[nwg_control(parent: window, flags: "VISIBLE")]
     #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Points(25.0) })]
     destination_frame: nwg::Frame,
 
     #[nwg_partial(parent: destination_frame)]
-    #[nwg_events((button, OnButtonClick): [SavegameManagerApp::select_dest_folder])]
-    destination: FolderSelectRow,
+    // #[nwg_events((button, OnButtonClick): [SavegameManagerApp::select_folder(self, "Select destination folder", FolderSelectRow::Destination)])]
+    destination: FolderSelectRowPartial,
 
-    #[nwg_control(text: "", background_color: Some([0,0,0]))]
+    #[nwg_control(parent: window, text: "", background_color: Some([0,0,0]))]
     #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Auto }, flex_grow: 1.0)]
     lbl_placeholder: nwg::Label,
 }
@@ -55,24 +66,16 @@ impl SavegameManagerApp {
         }
     }
 
-    fn select_source_folder(&self) {
-        if let Ok(dialog) = SavegameManagerApp::open_dialog("Select source folder", &self.window.handle) {
+    fn select_folder(&self, button: &nwg::Button) {
+        if let Ok(dialog) = SavegameManagerApp::open_dialog(title, &self.window.handle) {
             match dialog.get_selected_item() {
                 Ok(path) =>
                     if let Ok(path_string) =  path.into_string() {
-                        self.source.button.set_text(path_string.as_str());
-                    }
-                Err(_) => {}
-            }
-        }
-    }
-
-    fn select_dest_folder(&self) {
-        if let Ok(dialog) = SavegameManagerApp::open_dialog("Select destination folder", &self.window.handle) {
-            match dialog.get_selected_item() {
-                Ok(path) =>
-                    if let Ok(path_string) =  path.into_string() {
-                        self.destination.button.set_text(path_string.as_str());
+                        // match row {
+                        //     FolderSelectRow::Source => &self.source.button,
+                        //     FolderSelectRow::Destination => &self.destination.button
+                        // }
+                        // .set_text(path_string.as_str());
                     }
                 Err(_) => {}
             }
@@ -84,13 +87,13 @@ impl Default for SavegameManagerApp {
     fn default() -> Self {
         let mut app = Self {
             window: Default::default(), layout: Default::default(),
-            source_frame: Default::default(), source: Default::default(),
+            source_frame: Default::default(), source_layout: Default::default(), source_label: Default::default(), source_button: Default::default(),
             destination_frame: Default::default(), destination: Default::default(),
             lbl_placeholder: Default::default()
         };
 
-        app.source.init_label_text = "Source:";
-        app.source.init_button_text = "Select source folder";
+        // app.source.init_label_text = "Source:";
+        // app.source.init_button_text = "Select source folder";
         app.destination.init_label_text = "Destination:";
         app.destination.init_button_text = "Select destination folder";
 
@@ -99,19 +102,10 @@ impl Default for SavegameManagerApp {
 }
 
 #[derive(Default, NwgPartial)]
-pub struct FolderSelectRow {
+pub struct FolderSelectRowPartial {
     init_label_text: &'static str,
     init_button_text: &'static str,
 
-    #[nwg_layout(flex_direction: FlexDirection::Row, padding: NO_PADDING)]
-    layout: nwg::FlexboxLayout,
-
-    #[nwg_control(text: data.init_label_text)]
-    #[nwg_layout_item(layout: layout, size: Size { width: D::Points(100.0), height: D::Auto })]
-    label: nwg::Label,
-    #[nwg_control(text: data.init_button_text)]
-    #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Auto }, flex_grow: 1.0)]
-    button: nwg::Button,
 }
 
 pub fn start_app() {
