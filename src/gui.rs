@@ -1,17 +1,31 @@
+use std::cell::RefCell;
+use std::fs::File;
+use std::io::BufReader;
+
 use native_windows_gui as nwg;
 use native_windows_derive as nwd;
 
 use nwd::NwgUi;
 use nwg::NativeUi;
-
 use nwg::stretch::{ geometry::{ Size, Rect }, style:: { Dimension as D, FlexDirection } };
 
+use serde::{Deserialize, Serialize};
+
 const NO_PADDING: Rect<D> = Rect { start: D::Points(0.0), end: D::Points(0.0), top: D::Points(0.0), bottom: D::Points(0.0) };
+const DATA_FILE: &str = "savegame_manager.json";
+
+#[derive(Default, Serialize, Deserialize)]
+struct SavegameManagerAppData {
+    source_path: String,
+    dest_path: String,
+}
 
 #[derive(Default, NwgUi)]
 pub struct SavegameManagerApp {
+    data: RefCell<SavegameManagerAppData>,
+
     #[nwg_control(size: (800, 600), title: "Savegame Manager", flags: "MAIN_WINDOW")]
-    #[nwg_events( OnWindowClose: [nwg::stop_thread_dispatch()] )]
+    #[nwg_events( OnWindowClose: [SavegameManagerApp::exit] )]
     window: nwg::Window,
 
     #[nwg_layout(parent: window, flex_direction: FlexDirection::Column)]
@@ -58,6 +72,33 @@ pub struct SavegameManagerApp {
 }
 
 impl SavegameManagerApp {
+    fn exit(&self) {
+        let data = self.data.borrow();
+
+        if let Ok(file) = File::create(DATA_FILE) {
+            serde_json::to_writer_pretty(file, &*data).unwrap_or_default();
+        }
+
+        nwg::stop_thread_dispatch();
+    }
+
+    fn load_data(&self) {
+        let mut data = self.data.borrow_mut();
+        if let Ok(file) = File::open(DATA_FILE) {
+            if let Ok(json) = serde_json::from_reader::<File, SavegameManagerAppData>(file) {
+                *data = json;
+                if data.source_path.len() > 0 {
+                    self.source_button.set_text(&data.source_path);
+                }
+                if data.dest_path.len() > 0 {
+                    self.dest_button.set_text(&data.dest_path);
+                }
+            }
+        } else {
+            println!("Unable to open file {}", DATA_FILE)
+        }
+    }
+
     fn open_dialog(title: &str, handle: &nwg::ControlHandle) -> Result<nwg::FileDialog, nwg::NwgError> {
         let mut dialog = nwg::FileDialog::default();
         nwg::FileDialog::builder()
@@ -78,8 +119,15 @@ impl SavegameManagerApp {
         if let Ok(dialog) = SavegameManagerApp::open_dialog(title, &self.window.handle) {
             match dialog.get_selected_item() {
                 Ok(path) =>
-                    if let Ok(path_string) =  path.into_string() {
+                    if let Ok(path_string) = path.into_string() {
                         button.set_text(path_string.as_str());
+
+                        let mut data = self.data.borrow_mut();
+                        if button == &self.source_button {
+                            data.source_path = path_string;
+                        } else {
+                            data.dest_path = path_string;
+                        }
                     }
                 Err(_) => {}
             }
@@ -87,8 +135,6 @@ impl SavegameManagerApp {
     }
 }
 
-use std::cell::RefCell;
-use serde::{Deserialize, Serialize};
 use time;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -180,9 +226,10 @@ pub fn start_app() {
         .weight(300)
         .build(&mut font).expect("Failed to build default font");
     nwg::Font::set_global_default(Some(font));
-    let _app = SavegameManagerApp::build_ui(Default::default()).expect("Failed to build ui");
+    let app = SavegameManagerApp::build_ui(Default::default()).expect("Failed to build ui");
+    app.load_data();
 
     // make window visible after construction is done to avoid render glitches
-    _app.window.set_visible(true);
+    app.window.set_visible(true);
     nwg::dispatch_thread_events();
 }
