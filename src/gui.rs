@@ -1,11 +1,13 @@
 use std::cell::RefCell;
 use std::fs::File;
+use std::sync::RwLock;
 use std::path::{Path, PathBuf};
+
+use notify::{RecommendedWatcher, Watcher};
 
 use native_windows_gui as nwg;
 use native_windows_derive as nwd;
 
-use notify::{RecommendedWatcher, Watcher};
 use nwd::NwgUi;
 use nwg::NativeUi;
 use nwg::stretch::{ geometry::{ Size, Rect }, style:: { Dimension as D, FlexDirection } };
@@ -14,6 +16,9 @@ use serde::{Deserialize, Serialize};
 
 const NO_PADDING: Rect<D> = Rect { start: D::Points(0.0), end: D::Points(0.0), top: D::Points(0.0), bottom: D::Points(0.0) };
 const DATA_FILE: &str = "savegame_manager.json";
+
+static SRC_HAS_CHANGES: RwLock<bool> = RwLock::new(false);
+static SRC_LATEST_CHANGE: RwLock<i64> = RwLock::new(0);
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -27,12 +32,16 @@ struct SavegameManagerAppData {
 pub struct SavegameManagerApp {
     data: RefCell<SavegameManagerAppData>,
 
-    watcher_path: RefCell<Option<Box<PathBuf>>>,
+    watcher_path: RefCell<Option<PathBuf>>,
     watcher: RefCell<Option<RecommendedWatcher>>,
 
     #[nwg_control(size: (800, 600), title: "Savegame Manager", flags: "MAIN_WINDOW")]
     #[nwg_events( OnWindowClose: [SavegameManagerApp::exit] )]
     window: nwg::Window,
+
+    #[nwg_control(parent: window, interval: std::time::Duration::from_millis(500), active: true)]
+    #[nwg_events(OnTimerTick: [SavegameManagerApp::timer_tick])]
+    timer: nwg::AnimationTimer,
 
     #[nwg_layout(parent: window, flex_direction: FlexDirection::Column)]
     layout: nwg::FlexboxLayout,
@@ -81,11 +90,20 @@ pub struct SavegameManagerApp {
     savegame_list: SavegameListView,
 }
 
-struct SavegameSourceWatcher;
+struct SavegameSourceWatchEventHandler;
 
-impl notify::EventHandler for SavegameSourceWatcher {
-    fn handle_event(&mut self, _event: notify::Result<notify::Event>) {
-        
+impl notify::EventHandler for SavegameSourceWatchEventHandler {
+    fn handle_event(&mut self, event: notify::Result<notify::Event>) {
+        if let Ok(_) = event {
+            let changes_read = { SRC_HAS_CHANGES.read().unwrap().clone() };
+            if !changes_read {
+                let mut changes = SRC_HAS_CHANGES.write().unwrap();
+                *changes = true;
+            }
+
+            let mut last_change = SRC_LATEST_CHANGE.write().unwrap();
+            *last_change = time::OffsetDateTime::now_utc().unix_timestamp();
+        }
     }
 }
 
@@ -99,7 +117,7 @@ impl SavegameManagerApp {
 
         nwg::stop_thread_dispatch();
     }
-    
+
     fn start_watcher(&self) {
         let data = self.data.borrow();
         let src_path = Path::new(data.source_path.as_str());
@@ -109,21 +127,32 @@ impl SavegameManagerApp {
             let mut current_path = self.watcher_path.borrow_mut();
             let mut watcher = self.watcher.borrow_mut();
 
-            if let Some(current_path_box) = current_path.as_ref() {
-                let current_path_path = current_path_box.as_ref();
+            if let Some(current_path_path) = current_path.as_ref() {
                 if let Some(rec_watch) = watcher.as_mut() {
                     rec_watch.unwatch(current_path_path).unwrap_or_default();
                 }
             }
-
-            let mut rec_watch_result = notify::recommended_watcher(SavegameSourceWatcher);
+            let rec_watch_result = notify::recommended_watcher(SavegameSourceWatchEventHandler);
             if let Ok(mut rec_watch) = rec_watch_result {
-                rec_watch.watch(src_path, notify::RecursiveMode::NonRecursive);
+                rec_watch.watch(src_path, notify::RecursiveMode::NonRecursive).unwrap_or_default();
                 *watcher = Some(rec_watch);
-                *current_path = Some(Box::new(src_path.to_owned()));
+                *current_path = Some(src_path.to_owned());
             } else {
                 *watcher = None;
                 *current_path = None;
+            }
+        }
+    }
+
+    fn timer_tick(&self) {
+        let changes = { SRC_HAS_CHANGES.read().unwrap().clone() };
+        if changes {
+            let last_change = { SRC_LATEST_CHANGE.read().unwrap().clone() };
+            let now = time::OffsetDateTime::now_utc().unix_timestamp();
+            if now - last_change > 3 {
+                println!("Changes detected, making backup");
+                let mut changes = SRC_HAS_CHANGES.write().unwrap();
+                *changes = false;
             }
         }
     }
@@ -213,6 +242,7 @@ struct SavegameMeta {
 
 }
 
+#[allow(dead_code)]
 #[derive(Default)]
 struct SavegameListView {
     base: nwg::ListView,
@@ -244,10 +274,11 @@ impl SavegameListView {
         self.base.insert_items(&row);
     }
 
+    #[allow(dead_code)]
     fn add_savegame(&self, meta: SavegameMeta) {
         let mut data = self.data.borrow_mut();
         data.push(meta.clone());
-        
+
         let index: i32 = data.len() as i32;
 
         let save_timestamp = time::OffsetDateTime::from_unix_timestamp(meta.date).unwrap_or(time::OffsetDateTime::now_utc());
@@ -259,6 +290,7 @@ impl SavegameListView {
         self.base.insert_items(&row);
     }
 
+    #[allow(dead_code)]
     fn remove_savegame(&self, index: usize) {
         let mut data = self.data.borrow_mut();
         data.remove(index);
@@ -296,6 +328,7 @@ pub fn start_app() {
     nwg::Font::set_global_default(Some(font));
     let app = SavegameManagerApp::build_ui(Default::default()).expect("Failed to build ui");
     app.load_data();
+    app.start_watcher();
 
     // make window visible after construction is done to avoid render glitches
     app.window.set_visible(true);
