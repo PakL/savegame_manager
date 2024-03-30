@@ -47,7 +47,11 @@ fn take_backup(src_path: &String, dst_path: &String, copy_screenshot: &bool) -> 
     }
 
     if *copy_screenshot {
-        std::fs::copy("screenshot.jpg", dst_pathbuf.join("screenshot.jpg"))?;
+        let screenshot_path = PathBuf::from("screenshot.jpg");
+        if screenshot_path.exists() && screenshot_path.is_file() {
+            std::fs::copy("screenshot.jpg", dst_pathbuf.join("screenshot.jpg")).unwrap_or_default();
+            std::fs::remove_file(screenshot_path).unwrap_or_default();
+        }
     }
 
     let meta_file = File::create(dst_pathbuf.join("meta.json"))?;
