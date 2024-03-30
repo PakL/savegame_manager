@@ -675,6 +675,9 @@ impl SavegameListView {
     fn update_list(&self) {
         let mut data = self.data.borrow_mut();
         data.sort_by(|a, b| b.date.cmp(&a.date));
+        drop(data);
+
+        let data = self.data.borrow();
 
         self.base.set_redraw(false);
 
