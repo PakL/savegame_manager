@@ -161,6 +161,28 @@ pub struct SavegameManagerApp {
     #[nwg_events(OnButtonClick: [SavegameManagerApp::delete_click])]
     savegame_delete: nwg::Button,
 // endregion
+
+// region: rename dialog
+    #[nwg_control(parent: Some(&data.window), size: (300, 120), title: "Rename backup", flags: "WINDOW")]
+    #[nwg_events(OnKeyEsc: [SavegameManagerApp::rename_cancel(SELF, EVT)], OnKeyEnter: [SavegameManagerApp::rename_confirm])]
+    rename_dialog: nwg::Window,
+
+    #[nwg_layout(parent: rename_dialog, spacing: 2)]
+    rename_layout: nwg::GridLayout,
+
+    #[nwg_control(parent: rename_dialog, text: "", limit: 128)]
+    #[nwg_layout_item(layout: rename_layout, row: 0, col: 0, col_span: 2)]
+    rename_input: nwg::TextInput,
+
+    #[nwg_control(parent: rename_dialog, text: "Rename")]
+    #[nwg_layout_item(layout: rename_layout, row: 1, col: 0)]
+    rename_btn: nwg::Button,
+
+    #[nwg_control(parent: rename_dialog, text: "Cancel")]
+    #[nwg_layout_item(layout: rename_layout, row: 1, col: 1)]
+    #[nwg_events(OnButtonClick: [SavegameManagerApp::rename_cancel(SELF, EVT)])]
+    rename_cancel: nwg::Button,
+// endregion
 }
 
 
@@ -431,6 +453,8 @@ impl SavegameManagerApp {
                 self.savegame_load.set_enabled(false);
                 self.savegame_rename.set_enabled(false);
                 self.savegame_delete.set_enabled(false);
+
+                self.rename_dialog.set_visible(false);
             }
         }
     }
@@ -449,13 +473,19 @@ impl SavegameManagerApp {
             nwg::EventData::OnKey(nwg::keys::F5) => {
                 self.refresh_backup_list();
             },
+            nwg::EventData::OnKey(nwg::keys::F2) => {
+                self.rename_click();
+            }
+            nwg::EventData::OnKey(nwg::keys::DELETE) => {
+                self.delete_click();
+            }
             _ => {}
         }
     }
 
     fn load_click(&self) {
-        write_to_rwlock(&WATCHER_PAUSED, true);
         if let Some(savegame) = self.savegame_list.get_selected_savegame() {
+            write_to_rwlock(&WATCHER_PAUSED, true);
             let src_path = self.data.borrow().source_path.clone();
             let dst_path = self.data.borrow().dest_path.clone();
             
@@ -463,14 +493,64 @@ impl SavegameManagerApp {
                 println!("Error loading backup: {:?}", err);
                 nwg::modal_error_message(&self.window, "Load error", format!("Error loading backup: {}", err).as_str());
             }
-        }
 
-        self.refresh_backup_list();
-        write_to_rwlock(&WATCHER_PAUSED, false);
+            self.refresh_backup_list();
+            self.savegame_list.select_by_name(savegame.name.as_str());
+            write_to_rwlock(&WATCHER_PAUSED, false);
+        }
     }
 
     fn rename_click(&self) {
+        if let Some(savegame) = self.savegame_list.get_selected_savegame() {
+            let (x, y) = self.window.position();
+            let (width, height) = self.window.size();
+            let (dialog_width, dialog_height) = self.rename_dialog.size();
 
+            self.rename_input.set_text(savegame.name.as_str());
+            self.rename_dialog.set_position(x + (width as i32 - dialog_width as i32) - 15, y + (height as i32 - dialog_height as i32) - 50);
+            self.rename_dialog.set_visible(true);
+            self.rename_input.set_selection(0..savegame.name.len() as u32);
+            self.rename_input.set_focus();
+        }
+    }
+
+    fn rename_confirm(&self) {
+        if let Some(savegame) = self.savegame_list.get_selected_savegame() {
+            let new_name: String = self.rename_input.text()
+                .replace("<", "").replace(">", "")
+                .replace(":", "").replace("\"", "")
+                .replace("/", "").replace("\\", "")
+                .replace("|", "").replace("?", "")
+                .replace("*", "").trim().to_owned();
+
+            if new_name.len() > 0 {
+                match crate::backup::rename_backup(&self.data.borrow().dest_path, &savegame.name, &new_name) {
+                    Ok(_) => {
+                        self.rename_dialog.set_visible(false);
+                        self.refresh_backup_list();
+                        self.savegame_list.select_by_name(new_name.as_str());
+                    },
+                    Err(err) => {
+                        println!("Error renaming backup: {:?}", err);
+                        nwg::modal_error_message(&self.rename_dialog, "Rename error", format!("Error renaming backup: {}", err).as_str());
+                    }
+                }
+            } else {
+                nwg::modal_error_message(&self.rename_dialog, "Rename error", "The new name must not be empty");
+            }
+        }
+    }
+
+    fn rename_cancel(&self, event: nwg::Event) {
+        match event {
+            nwg::Event::OnButtonClick => {
+                self.rename_dialog.set_visible(false);
+            },
+            nwg::Event::OnKeyEsc => {
+                self.rename_dialog.set_visible(false);
+            },
+            _ => {}
+        }
     }
 
     fn delete_click(&self) {
@@ -605,6 +685,17 @@ impl SavegameListView {
         let data = self.data.borrow();
         for (i, savegame) in data.iter().enumerate() {
             self.base.update_item(i + 1, nwg::InsertListViewItem { column_index: 0, index: Some(i as i32 + 1), text: Some(savegame.name.clone()), image: Some(if i == row { 2 } else { 1 }) });
+        }
+    }
+
+    fn select_by_name(&self, name: &str) {
+        let data = self.data.borrow();
+        for (i, savegame) in data.iter().enumerate() {
+            if savegame.name == name {
+                self.select_item(i + 1, true);
+                self.set_focus();
+                break;
+            }
         }
     }
 }

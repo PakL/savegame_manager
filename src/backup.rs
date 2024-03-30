@@ -180,3 +180,14 @@ pub fn load_backup(src_path: &String, dst_path: &String, backup: &SavegameMeta) 
 
     Ok(())
 }
+
+pub fn rename_backup(dst_path: &String, old_name: &String, new_name: &String) -> std::io::Result<()> {
+    let old_path = PathBuf::from(dst_path).join(old_name);
+    let new_path = PathBuf::from(dst_path).join(new_name);
+
+    if old_path.exists() && old_path.is_dir() && !new_path.exists() {
+        std::fs::rename(old_path, new_path)
+    } else {
+        Ok(())
+    }
+}
