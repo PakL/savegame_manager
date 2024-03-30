@@ -17,3 +17,6 @@ chrono = "0.4.37"
 anyhow = "1.0.81"
 opener = "0.7.0"
 trash = "4.1.0"
+
+[build-dependencies]
+winres = "0.1.12"

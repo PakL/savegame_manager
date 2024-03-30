@@ -34,7 +34,10 @@ pub struct SavegameManagerApp {
     #[nwg_resource(family: "Courier New", size: 14, weight: 400)]
     font_monospace: nwg::Font,
 
-    #[nwg_resource(source_bin: Some(include_bytes!("../assets/icon.ico")))]
+    #[nwg_resource]
+    embed: nwg::EmbedResource,
+
+    #[nwg_resource(source_embed: Some(&data.embed), source_embed_str: Some("MAINICON"))]
     window_icon: nwg::Icon,
 
     #[nwg_resource(source_bin: Some(include_bytes!("../assets/no_screenshot.png")), size: Some((295, 166)))]
