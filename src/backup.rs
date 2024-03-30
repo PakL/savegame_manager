@@ -1,5 +1,6 @@
 use crate::*;
 
+use trash::delete;
 use std::{fs::File, path::PathBuf, sync::RwLock};
 use serde::{Serialize, Deserialize};
 
@@ -187,6 +188,16 @@ pub fn rename_backup(dst_path: &String, old_name: &String, new_name: &String) ->
 
     if old_path.exists() && old_path.is_dir() && !new_path.exists() {
         std::fs::rename(old_path, new_path)
+    } else {
+        Ok(())
+    }
+}
+
+pub fn remove_backup(dst_path: &String, backup_name: &String) -> Result<(), trash::Error> {
+    let backup_path = PathBuf::from(dst_path).join(backup_name);
+
+    if backup_path.exists() && backup_path.is_dir() {
+        delete(backup_path)
     } else {
         Ok(())
     }

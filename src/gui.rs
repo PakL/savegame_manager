@@ -554,7 +554,23 @@ impl SavegameManagerApp {
     }
 
     fn delete_click(&self) {
-
+        if let Some(savegame) = self.savegame_list.get_selected_savegame() {
+            let result = nwg::modal_message(&self.window, &nwg::MessageParams { title: "Deleting backup", content: format!("Are you sure you want to delete {}?\n(We'll just move it to the recycle bin for your.)", savegame.name).as_str(), buttons: nwg::MessageButtons::YesNo, icons: nwg::MessageIcons::Question });
+            match result {
+                nwg::MessageChoice::Yes => {
+                    match crate::backup::remove_backup(&self.data.borrow().dest_path, &savegame.name) {
+                        Ok(_) => {
+                            self.refresh_backup_list();
+                        },
+                        Err(err) => {
+                            println!("Error deleting backup: {:?}", err);
+                            nwg::modal_error_message(&self.window, "Delete error", format!("Error deleting backup: {}", err).as_str());
+                        }
+                    }
+                },
+                _ => {}
+            }
+        }
     }
 }
 
