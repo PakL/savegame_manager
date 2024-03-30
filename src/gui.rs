@@ -34,10 +34,13 @@ pub struct SavegameManagerApp {
     #[nwg_resource(family: "Courier New", size: 14, weight: 400)]
     font_monospace: nwg::Font,
 
+    #[nwg_resource(source_bin: Some(include_bytes!("../assets/icon.ico")))]
+    window_icon: nwg::Icon,
+
     #[nwg_resource(source_bin: Some(include_bytes!("../assets/no_screenshot.png")), size: Some((295, 166)))]
     no_screenshot: nwg::Bitmap,
 
-    #[nwg_control(size: (800, 600), title: "Savegame Manager", flags: "MAIN_WINDOW")]
+    #[nwg_control(size: (800, 600), title: "Savegame Manager", flags: "MAIN_WINDOW", icon: Some(&data.window_icon))]
     #[nwg_events( OnWindowClose: [SavegameManagerApp::exit] )]
     window: nwg::Window,
 
@@ -163,7 +166,7 @@ pub struct SavegameManagerApp {
 // endregion
 
 // region: rename dialog
-    #[nwg_control(parent: Some(&data.window), size: (300, 120), title: "Rename backup", flags: "WINDOW")]
+    #[nwg_control(parent: Some(&data.window), size: (300, 120), title: "Rename backup", flags: "WINDOW", icon: Some(&data.window_icon))]
     #[nwg_events(OnKeyEsc: [SavegameManagerApp::rename_cancel(SELF, EVT)], OnKeyEnter: [SavegameManagerApp::rename_confirm])]
     rename_dialog: nwg::Window,
 
