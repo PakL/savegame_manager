@@ -1,7 +1,8 @@
 use crate::*;
 use crate::backup::{SavegameMeta, look_for_backups, get_meta_for_backup};
 
-use std::{cell::RefCell, fs::File, path::PathBuf};
+use std::cell::RefMut;
+use std::{cell::{Ref, RefCell}, fs::File, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -15,18 +16,59 @@ const PADDING_LEFT: Rect<D> = Rect { start: D::Points(5.0), end: D::Points(0.0),
 const DATA_FILE: &str = "savegame_manager.json";
 
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
+enum ProfileIntervalUnit {
+    Seconds,
+    Minutes,
+    Hours,
+}
+
+impl Default for ProfileIntervalUnit {
+    fn default() -> Self { ProfileIntervalUnit::Minutes }
+}
+
+fn default_true() -> bool { true }
+
+#[derive(Serialize, Deserialize)]
 #[serde(default)]
-struct SavegameManagerAppData {
-    #[serde(skip)] has_changed: bool,
-    source_path: String,
-    dest_path: String,
-    disable_screenshots: bool,
+struct SavegameManagerProfile {
+    selected: bool,
+    name: String,
+    src_path: String,
+    dst_path: String,
+    #[serde(default = "default_true")] screenshots: bool,
+    #[serde(default = "default_true")] manual_save_detection: bool,
+    auto_saves_max: u16,
+    auto_saves_interval: u16,
+    auto_saves_interval_unit: ProfileIntervalUnit,
+}
+
+impl std::fmt::Display for SavegameManagerProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+impl Default for SavegameManagerProfile {
+    fn default() -> Self {
+        Self {
+            selected: Default::default(),
+            name: Default::default(),
+            src_path: Default::default(),
+            dst_path: Default::default(),
+            screenshots: true,
+            manual_save_detection: true,
+            auto_saves_max: 12,
+            auto_saves_interval: 5,
+            auto_saves_interval_unit: Default::default()
+        }
+    }
 }
 
 #[derive(Default, NwgUi)]
 pub struct SavegameManagerApp {
-    data: RefCell<SavegameManagerAppData>,
+    dummy_profile: RefCell<SavegameManagerProfile>,
+    profiles_changed: RefCell<bool>,
 
     #[nwg_resource(family: "Segoe UI Semibold", size: 16, weight: 400)]
     font_bold: nwg::Font,
@@ -54,6 +96,9 @@ pub struct SavegameManagerApp {
     #[nwg_layout(parent: window, flex_direction: FlexDirection::Column)]
     layout: nwg::FlexboxLayout,
 
+    #[nwg_control(parent: window)]
+    #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Points(25.0) })]
+    profile_select: nwg::ComboBox<SavegameManagerProfile>,
 // region: Source folder selection
     #[nwg_control(parent: window, flags: "VISIBLE")]
     #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Points(25.0) })]
@@ -192,14 +237,29 @@ pub struct SavegameManagerApp {
 }
 
 
-
 impl SavegameManagerApp {
-    fn exit(&self) {
-        let data = self.data.borrow();
+    fn get_current_profile(&self) -> Ref<SavegameManagerProfile> {
+        if let Some(selection) = self.profile_select.selection() {
+            return Ref::map(self.profile_select.collection(), |c| &c[selection]);
+        }
+        
+        self.dummy_profile.borrow()
+    }
 
-        if data.has_changed {
+    fn get_current_profile_mut(&self) -> RefMut<SavegameManagerProfile> {
+        if let Some(selection) = self.profile_select.selection() {
+            return RefMut::map(self.profile_select.collection_mut(), |c| &mut c[selection]);
+        }
+
+        self.dummy_profile.borrow_mut()
+    }
+
+    fn exit(&self) {
+        let profiles_changed = self.profiles_changed.borrow();
+
+        if *profiles_changed {
             if let Ok(file) = File::create(DATA_FILE) {
-                serde_json::to_writer_pretty(file, &*data).unwrap_or_default();
+                serde_json::to_writer_pretty(file, &*self.profile_select.collection()).unwrap_or_default();
             }
         }
 
@@ -212,15 +272,14 @@ impl SavegameManagerApp {
     }
 
     fn start_watcher(&self) {
-        let data = self.data.borrow();
-
-        if !crate::watcher::start_watcher(&data.source_path, &data.dest_path) {
+        let profile = self.get_current_profile();
+        if !crate::watcher::start_watcher(&profile.src_path, &profile.dst_path) {
             nwg::modal_error_message(&self.window, "Watcher error", "Could not start folder monitoring");
         }
     }
 
     fn tick_screenshot(&self) -> bool {
-        if !self.data.borrow().disable_screenshots {
+        if self.get_current_profile().screenshots {
             let state = read_rwlock_or(&SCREENSHOT_STATE, 0);
             match state {
                 0 => {
@@ -253,7 +312,7 @@ impl SavegameManagerApp {
         } else {
             let backup_name = read_rwlock_or(&BACKUP_NAME, String::new());
             if backup_name.len() > 0 {
-                let dst_path = self.data.borrow().dest_path.clone();
+                let dst_path = self.get_current_profile().dst_path.clone();
                 match get_meta_for_backup(&dst_path, &backup_name) {
                     Ok(meta) => {
                         self.savegame_list.unshift_savegame(meta);
@@ -278,9 +337,11 @@ impl SavegameManagerApp {
                 if now - last_change > 1_000 && !wait_for_screenshot {
                     println!("Creating backup");
                     write_to_rwlock(&BACKUP_STATE, 1);
-                    let src_path = self.data.borrow().source_path.clone();
-                    let dst_path = self.data.borrow().dest_path.clone();
-                    let copy_screenshot = !self.data.borrow().disable_screenshots;
+                    let data = self.get_current_profile();
+                    let src_path = data.src_path.clone();
+                    let dst_path = data.dst_path.clone();
+                    let copy_screenshot = data.screenshots;
+                    drop(data);
                     std::thread::spawn(move || crate::backup::create_backup(&src_path, &dst_path, &copy_screenshot));
                 }
             },
@@ -301,7 +362,8 @@ impl SavegameManagerApp {
     }
 
     fn refresh_backup_list(&self) {
-        let dst_path = self.data.borrow().dest_path.clone();
+        let profile = self.get_current_profile();
+        let dst_path = profile.dst_path.clone();
 
         if dst_path.len() == 0 {
             return;
@@ -317,7 +379,7 @@ impl SavegameManagerApp {
 
                 self.savegame_list.update_list();
 
-                let src_path = self.data.borrow().source_path.clone();
+                let src_path = profile.src_path.clone();
 
                 let mut found_current_backup = false;
                 let live_hashes = crate::backup::create_hash_list(&src_path);
@@ -342,23 +404,15 @@ impl SavegameManagerApp {
     }
 
     fn load_data(&self) {
-        let mut data = self.data.borrow_mut();
-
-        match File::open(DATA_FILE) {
+        let mut profiles: Vec<SavegameManagerProfile> = match File::open(DATA_FILE) {
             Ok(file) => {
-                match serde_json::from_reader::<File, SavegameManagerAppData>(file) {
+                match serde_json::from_reader::<File, Vec<SavegameManagerProfile>>(file) {
                     Ok(json) => {
-                        *data = json;
-                        if data.source_path.len() > 0 {
-                            self.source_button.set_text(&data.source_path);
-                        }
-                        if data.dest_path.len() > 0 {
-                            self.dest_button.set_text(&data.dest_path);
-                        }
-                        self.screenshots_check.set_check_state(if data.disable_screenshots { nwg::CheckBoxState::Unchecked } else { nwg::CheckBoxState::Checked });
+                        json
                     },
                     Err(err) => {
                         nwg::modal_error_message(&self.window, "Config file error", format!("Unable to parse config file. {:?}", err).as_str());
+                        vec![]
                     }
                 }
             },
@@ -368,12 +422,28 @@ impl SavegameManagerApp {
                     std::io::ErrorKind::PermissionDenied => { nwg::modal_error_message(&self.window, "Config file error", "Unable to open config file. Permission was denied."); },
                     e => { nwg::modal_error_message(&self.window, "Config file error", format!("An unusual error occured trying to open config file. {:?}", e).as_str()); },
                 }
+                vec![]
+            }
+        };
+
+        if profiles.len() == 0 {
+            let mut p: SavegameManagerProfile = Default::default();
+            p.name = "Default".to_owned();
+            p.selected = true;
+            profiles.push(p);
+        }
+
+        let mut selected_index: Option<usize> = None;
+        for (i, profile) in profiles.iter().enumerate() {
+            if profile.selected {
+                selected_index = Some(i);
+                break;
             }
         }
 
-        drop(data);
+        self.profile_select.set_collection(profiles);
+        self.profile_select.set_selection(selected_index);
         self.refresh_backup_list();
-
     }
 
     fn open_dialog(title: &str, handle: &nwg::ControlHandle) -> Result<nwg::FileDialog, nwg::NwgError> {
@@ -399,14 +469,14 @@ impl SavegameManagerApp {
                     if let Ok(path_string) = path.into_string() {
                         button.set_text(path_string.as_str());
 
-                        let mut data = self.data.borrow_mut();
+                        let mut profile = self.get_current_profile_mut();
                         if button == &self.source_button {
-                            data.source_path = path_string;
+                            profile.src_path = path_string;
                         } else {
-                            data.dest_path = path_string;
+                            profile.dst_path = path_string;
                         }
-                        data.has_changed = true;
-                        drop(data);
+                        drop(profile);
+                        *self.profiles_changed.borrow_mut() = true;
 
                         if button == &self.source_button {
                             self.start_watcher();
@@ -420,12 +490,12 @@ impl SavegameManagerApp {
     }
 
     fn checkbox_click(&self) {
-        let mut data = self.data.borrow_mut();
-        data.disable_screenshots = match self.screenshots_check.check_state() {
-            nwg::CheckBoxState::Unchecked => true,
-            _ => false,
+        let mut profile = self.get_current_profile_mut();
+        profile.screenshots = match self.screenshots_check.check_state() {
+            nwg::CheckBoxState::Unchecked => false,
+            _ => true,
         };
-        data.has_changed = true;
+        *self.profiles_changed.borrow_mut() = true;
     }
 
     fn show_details(&self) {
@@ -438,7 +508,7 @@ impl SavegameManagerApp {
                     String::from(&format!("{}… / {}", &c.1[..15], file_name))
                 }).collect::<Vec<String>>().join("\r\n").as_str());
 
-                let dst_path = PathBuf::from(self.data.borrow().dest_path.clone()).join(&savegame.name).join("screenshot.jpg");
+                let dst_path = PathBuf::from(self.get_current_profile().dst_path.clone()).join(&savegame.name).join("screenshot.jpg");
                 if dst_path.exists() && dst_path.is_file() {
                     let mut screenshot = nwg::Bitmap::default();
                     nwg::Bitmap::builder()
@@ -472,7 +542,7 @@ impl SavegameManagerApp {
 
     fn open_screenshot(&self) {
         if let Some(savegame) = self.savegame_list.get_selected_savegame() {
-            let dst_path = PathBuf::from(self.data.borrow().dest_path.clone()).join(&savegame.name).join("screenshot.jpg");
+            let dst_path = PathBuf::from(self.get_current_profile().dst_path.clone()).join(&savegame.name).join("screenshot.jpg");
             if dst_path.exists() && dst_path.is_file() {
                 let _ = opener::open(dst_path);
             }
@@ -497,8 +567,9 @@ impl SavegameManagerApp {
     fn load_click(&self) {
         if let Some(savegame) = self.savegame_list.get_selected_savegame() {
             write_to_rwlock(&WATCHER_PAUSED, true);
-            let src_path = self.data.borrow().source_path.clone();
-            let dst_path = self.data.borrow().dest_path.clone();
+            let data = self.get_current_profile();
+            let src_path = data.src_path.clone();
+            let dst_path = data.dst_path.clone();
             
             if let Err(err) = crate::backup::load_backup(&src_path, &dst_path, &savegame) {
                 println!("Error loading backup: {:?}", err);
@@ -535,7 +606,7 @@ impl SavegameManagerApp {
                 .replace("*", "").trim().to_owned();
 
             if new_name.len() > 0 {
-                match crate::backup::rename_backup(&self.data.borrow().dest_path, &savegame.name, &new_name) {
+                match crate::backup::rename_backup(&self.get_current_profile().dst_path, &savegame.name, &new_name) {
                     Ok(_) => {
                         self.rename_dialog.set_visible(false);
                         self.refresh_backup_list();
@@ -569,7 +640,7 @@ impl SavegameManagerApp {
             let result = nwg::modal_message(&self.window, &nwg::MessageParams { title: "Deleting backup", content: format!("Are you sure you want to delete {}?\n(We'll just move it to the recycle bin for your.)", savegame.name).as_str(), buttons: nwg::MessageButtons::YesNo, icons: nwg::MessageIcons::Question });
             match result {
                 nwg::MessageChoice::Yes => {
-                    match crate::backup::remove_backup(&self.data.borrow().dest_path, &savegame.name) {
+                    match crate::backup::remove_backup(&self.get_current_profile().dst_path, &savegame.name) {
                         Ok(_) => {
                             self.refresh_backup_list();
                         },

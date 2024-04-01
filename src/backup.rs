@@ -18,7 +18,7 @@ pub struct SavegameMeta {
 
 fn take_backup(src_path: &String, dst_path: &String, copy_screenshot: &bool) -> Result<String, anyhow::Error> {
     let now = chrono::Local::now();
-    let backup_name = now.format("%Y%m%d%H%M%S").to_string();
+    let backup_name = now.format("%Y-%m-%d_%H-%M-%S").to_string();
 
     let src_pathbuf = PathBuf::from(src_path);
     let dst_pathbuf = PathBuf::from(dst_path).join(&backup_name);
@@ -131,10 +131,12 @@ pub fn create_hash_list(path: &String) -> Vec<(String, String)> {
     let pathbuf = PathBuf::from(path);
     let mut hash_list: Vec<(String, String)> = vec![];
 
-    for entry in std::fs::read_dir(&pathbuf).unwrap() {
-        let entry_path = entry.unwrap().path();
-        if entry_path.is_file() {
-            hash_list.push((String::from(entry_path.file_name().unwrap_or_default().to_str().unwrap_or_default()), fhc::file_blake3(&entry_path).unwrap()));
+    if pathbuf.exists() && pathbuf.is_dir() {
+        for entry in std::fs::read_dir(&pathbuf).unwrap() {
+            let entry_path = entry.unwrap().path();
+            if entry_path.is_file() {
+                hash_list.push((String::from(entry_path.file_name().unwrap_or_default().to_str().unwrap_or_default()), fhc::file_blake3(&entry_path).unwrap()));
+            }
         }
     }
 
