@@ -76,6 +76,7 @@ pub struct SavegameManagerApp {
     #[nwg_resource(family: "Courier New", size: 14, weight: 400)]
     font_monospace: nwg::Font,
 
+
     #[nwg_resource]
     embed: nwg::EmbedResource,
 
@@ -96,9 +97,38 @@ pub struct SavegameManagerApp {
     #[nwg_layout(parent: window, flex_direction: FlexDirection::Column)]
     layout: nwg::FlexboxLayout,
 
-    #[nwg_control(parent: window)]
+// region: Profile selection
+    #[nwg_control(parent: window, flags: "VISIBLE")]
     #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Points(25.0) })]
+    profile_frame: nwg::Frame,
+
+    #[nwg_layout(parent: profile_frame, flex_direction: FlexDirection::Row, padding: NO_PADDING)]
+    profile_layout: nwg::FlexboxLayout,
+
+    #[nwg_control(parent: profile_frame)]
+    #[nwg_layout_item(layout: profile_layout, size: Size { width: D::Auto, height: D::Auto }, margin: Rect { start: D::Points(0.0), top: D::Points(0.0), bottom: D::Points(0.0), end: D::Points(10.0) }, flex_grow: 1.0)]
+    #[nwg_events(OnComboxBoxSelection: [SavegameManagerApp::profile_select_change])]
     profile_select: nwg::ComboBox<SavegameManagerProfile>,
+
+    #[nwg_resource]
+    tooltip: nwg::Tooltip,
+
+    #[nwg_control(parent: profile_frame, text: "✨")]
+    #[nwg_layout_item(layout: profile_layout, size: Size { width: D::Points(30.0), height: D::Auto })]
+    #[nwg_events(OnTooltipText: [SavegameManagerApp::tooltip_text(SELF, EVT, EVT_DATA, HANDLE)], OnButtonClick: [SavegameManagerApp::profile_add])]
+    profile_add: nwg::Button,
+
+    #[nwg_control(parent: profile_frame, text: "🏷️")]
+    #[nwg_layout_item(layout: profile_layout, size: Size { width: D::Points(30.0), height: D::Auto })]
+    #[nwg_events(OnTooltipText: [SavegameManagerApp::tooltip_text(SELF, EVT, EVT_DATA, HANDLE)], OnButtonClick: [SavegameManagerApp::profile_rename])]
+    profile_rename: nwg::Button,
+
+    #[nwg_control(parent: profile_frame, text: "🗑️")]
+    #[nwg_layout_item(layout: profile_layout, size: Size { width: D::Points(30.0), height: D::Auto })]
+    #[nwg_events(OnTooltipText: [SavegameManagerApp::tooltip_text(SELF, EVT, EVT_DATA, HANDLE)], OnButtonClick: [SavegameManagerApp::profile_remove])]
+    profile_remove: nwg::Button,
+// endregion
+
 // region: Source folder selection
     #[nwg_control(parent: window, flags: "VISIBLE")]
     #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Points(25.0) })]
@@ -135,10 +165,22 @@ pub struct SavegameManagerApp {
     dest_button: nwg::Button,
 // endregion
 
-    #[nwg_control(parent: window, text: "Make screenshots when creating backup", check_state: nwg::CheckBoxState::Checked)]
+    #[nwg_control(parent: window, flags: "VISIBLE")]
     #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Points(25.0) })]
-    #[nwg_events(OnButtonClick: [SavegameManagerApp::checkbox_click])]
+    checkboxes_frame: nwg::Frame,
+
+    #[nwg_layout(parent: checkboxes_frame, margin: [0,0,0,0], spacing: 0)]
+    checkboxes_layout: nwg::GridLayout,
+
+    #[nwg_control(parent: checkboxes_frame, text: "Make screenshots when creating backup", check_state: nwg::CheckBoxState::Checked)]
+    #[nwg_layout_item(layout: checkboxes_layout, col: 0, row: 0)]
+    #[nwg_events(OnButtonClick: [SavegameManagerApp::screenshots_checkbox_click])]
     screenshots_check: nwg::CheckBox,
+
+    #[nwg_control(parent: checkboxes_frame, text: "Detect difference between auto and manual saves", check_state: nwg::CheckBoxState::Checked)]
+    #[nwg_layout_item(layout: checkboxes_layout, col: 1, row: 0)]
+    #[nwg_events(OnButtonClick: [SavegameManagerApp::manual_save_checkbox_click])]
+    manual_save_detection_check: nwg::CheckBox,
 
 
     #[nwg_control(parent: window, flags: "VISIBLE")]
@@ -366,18 +408,20 @@ impl SavegameManagerApp {
         let dst_path = profile.dst_path.clone();
 
         if dst_path.len() == 0 {
+            self.savegame_list.clear_list(true);
             return;
         }
 
         match look_for_backups(&dst_path) {
             Ok(backups) => {
-                self.savegame_list.clear_list();
                 self.savegame_list.set_redraw(false);
+                self.savegame_list.clear_list(false);
                 for backup in backups {
                     self.savegame_list.push_savegame(backup);
                 }
 
-                self.savegame_list.update_list();
+                self.savegame_list.update_list(false);
+                self.savegame_list.set_redraw(true);
 
                 let src_path = profile.src_path.clone();
 
@@ -404,6 +448,10 @@ impl SavegameManagerApp {
     }
 
     fn load_data(&self) {
+        self.tooltip.register_callback(&self.profile_add);
+        self.tooltip.register_callback(&self.profile_rename);
+        self.tooltip.register_callback(&self.profile_remove);
+
         let mut profiles: Vec<SavegameManagerProfile> = match File::open(DATA_FILE) {
             Ok(file) => {
                 match serde_json::from_reader::<File, Vec<SavegameManagerProfile>>(file) {
@@ -489,9 +537,18 @@ impl SavegameManagerApp {
         }
     }
 
-    fn checkbox_click(&self) {
+    fn screenshots_checkbox_click(&self) {
         let mut profile = self.get_current_profile_mut();
         profile.screenshots = match self.screenshots_check.check_state() {
+            nwg::CheckBoxState::Unchecked => false,
+            _ => true,
+        };
+        *self.profiles_changed.borrow_mut() = true;
+    }
+
+    fn manual_save_checkbox_click(&self) {
+        let mut profile = self.get_current_profile_mut();
+        profile.manual_save_detection = match self.manual_save_detection_check.check_state() {
             nwg::CheckBoxState::Unchecked => false,
             _ => true,
         };
@@ -654,6 +711,78 @@ impl SavegameManagerApp {
             }
         }
     }
+
+    fn profile_select_change(&self) {
+        let mut profiles = self.profile_select.collection_mut();
+        for profile in &mut *profiles {
+            profile.selected = false;
+        }
+
+        let selection = self.profile_select.selection();
+        if let Some(selection) = selection {
+            profiles[selection].selected = true;
+
+            self.source_button.set_text(profiles[selection].src_path.as_str());
+            self.dest_button.set_text(profiles[selection].dst_path.as_str());
+            self.screenshots_check.set_check_state(if profiles[selection].screenshots { nwg::CheckBoxState::Checked } else { nwg::CheckBoxState::Unchecked });
+            self.manual_save_detection_check.set_check_state(if profiles[selection].manual_save_detection { nwg::CheckBoxState::Checked } else { nwg::CheckBoxState::Unchecked });
+        }
+        drop(profiles);
+
+        *self.profiles_changed.borrow_mut() = true;
+        self.start_watcher();
+        self.refresh_backup_list();
+    }
+
+    fn tooltip_text(&self, evt: nwg::Event, evt_data: &nwg::EventData, handle: &nwg::ControlHandle) {
+        match evt {
+            nwg::Event::OnTooltipText => {
+                let tooltip = if handle == &self.profile_add {
+                    "Add new profile"
+                } else if handle == &self.profile_rename {
+                    "Rename selected profile"
+                } else if handle == &self.profile_remove {
+                    "Remove selected profile"
+                } else {
+                    ""
+                };
+                if tooltip.len() > 0 {
+                    let tooltip_data = evt_data.on_tooltip_text();
+                    tooltip_data.set_text(tooltip);
+                }
+            },
+            _ => {}
+        }
+    }
+
+    fn profile_add(&self) {
+        let mut new_profile = SavegameManagerProfile::default();
+        new_profile.name = "New profile".to_owned();
+        self.profile_select.push(new_profile);
+
+        self.profile_select.set_selection(Some(self.profile_select.collection().len() - 1));
+        self.profile_select_change();
+    }
+
+    fn profile_rename(&self) {
+        
+    }
+
+    fn profile_remove(&self) {
+        let result = nwg::modal_message(&self.window, &nwg::MessageParams { title: "Deleting profile", content: "Are you sure you want to delete the selected profile?", buttons: nwg::MessageButtons::YesNo, icons: nwg::MessageIcons::Question });
+        match result {
+            nwg::MessageChoice::Yes => {
+                let selection = self.profile_select.selection();
+                if let Some(selection) = selection {
+                    self.profile_select.remove(selection);
+
+                    self.profile_select.set_selection(Some(0));
+                    self.profile_select_change();
+                }
+            },
+            _ => {}
+        }
+    }
 }
 
 
@@ -688,20 +817,16 @@ impl SavegameListView {
         image_list.add_bitmap(&nwg::Bitmap::from_bin(include_bytes!("../assets/unchecked.bmp")).unwrap_or_default());
         image_list.add_bitmap(&nwg::Bitmap::from_bin(include_bytes!("../assets/checked.bmp")).unwrap_or_default());
 
-        self.base.set_image_list(Some(&image_list), nwg::ListViewImageListType::Small);
+        self.set_image_list(Some(&image_list), nwg::ListViewImageListType::Small);
 
-        self.base.insert_column(nwg::InsertListViewColumn { index: Some(0), fmt: Some(nwg::ListViewColumnFlags::LEFT), width: Some(300), text: Some("Name".to_owned()) });
-        self.base.insert_column(nwg::InsertListViewColumn { index: Some(1), fmt: Some(nwg::ListViewColumnFlags::LEFT), width: Some(300), text: Some("Date".to_owned()) });
-
-        let row = [
-            nwg::InsertListViewItem { column_index: 0, index: Some(0), text: Some("Name".to_owned()), image: Some(0) },
-            nwg::InsertListViewItem { column_index: 1, index: Some(0), text: Some("Date".to_owned()), image: None },
-        ];
-        self.base.insert_items(&row);
+        self.insert_column(nwg::InsertListViewColumn { index: Some(0), fmt: Some(nwg::ListViewColumnFlags::LEFT), width: Some(300), text: Some("Name".to_owned()) });
+        self.insert_column(nwg::InsertListViewColumn { index: Some(1), fmt: Some(nwg::ListViewColumnFlags::LEFT), width: Some(300), text: Some("Date".to_owned()) });
     }
 
-    fn clear_list(&self) {
-        self.base.set_redraw(false);
+    fn clear_list(&self, set_redraw: bool) {
+        if set_redraw {
+            self.set_redraw(false);
+        }
 
         let data = self.data.borrow();
         let data_len = data.len();
@@ -710,14 +835,16 @@ impl SavegameListView {
             self.remove_savegame(0);
         }
 
-        self.base.set_redraw(true);
+        if set_redraw {
+            self.set_redraw(true);
+        }
     }
 
     fn push_savegame(&self, meta: SavegameMeta) {
         let mut data = self.data.borrow_mut();
-        data.push(meta.clone());
-
         let index = data.len();
+        data.push(meta.clone());
+        drop(data);
 
         let save_timestamp = local_datetime_from_millis(meta.date);
 
@@ -726,57 +853,59 @@ impl SavegameListView {
             nwg::InsertListViewItem { column_index: 1, index: Some(index as i32), text: Some(save_timestamp.format("%c").to_string()), image: None },
         ];
 
-        self.base.insert_item(row[0].clone());
-        self.base.update_item(index, row[1].clone());
+        self.insert_item(row[0].clone());
+        self.update_item(index, row[1].clone());
     }
 
     fn unshift_savegame(&self, meta: SavegameMeta) {
         let mut data = self.data.borrow_mut();
-        data.insert(0, meta.clone());
-
         let index = data.len();
+        data.insert(0, meta.clone());
         drop(data);
 
-        self.base.insert_item(nwg::InsertListViewItem { column_index: 0, index: Some(index as i32), text: Some("-".to_owned()), image: None });
+        self.insert_item(nwg::InsertListViewItem { column_index: 0, index: Some(index as i32), text: Some("-".to_owned()), image: None });
 
-        self.update_list();
+        self.update_list(true);
         self.check_row(0);
     }
 
-    fn update_list(&self) {
+    fn update_list(&self, set_redraw: bool) {
         let mut data = self.data.borrow_mut();
         data.sort_by(|a, b| b.date.cmp(&a.date));
         drop(data);
 
         let data = self.data.borrow();
 
-        self.base.set_redraw(false);
+        if set_redraw {
+            self.set_redraw(false);
+        }
 
-        let mut index = 1;
+        let mut index = 0;
         for row in &*data {
             let save_timestamp = local_datetime_from_millis(row.date);
 
-            self.base.update_item(index, nwg::InsertListViewItem { column_index: 0, index: Some(index as i32), text: Some(row.name.clone()), image: Some(1) });
-            self.base.update_item(index, nwg::InsertListViewItem { column_index: 1, index: Some(index as i32), text: Some(save_timestamp.format("%c").to_string()), image: None });
+            self.update_item(index, nwg::InsertListViewItem { column_index: 0, index: Some(index as i32), text: Some(row.name.clone()), image: Some(1) });
+            self.update_item(index, nwg::InsertListViewItem { column_index: 1, index: Some(index as i32), text: Some(save_timestamp.format("%c").to_string()), image: None });
 
             index += 1;
         }
 
-        self.base.set_redraw(true);
+        if set_redraw {
+            self.base.set_redraw(true);
+        }
     }
 
     fn remove_savegame(&self, index: usize) {
         let mut data = self.data.borrow_mut();
         data.remove(index);
 
-        self.base.remove_item(index + 1);
+        self.base.remove_item(index);
     }
 
     fn get_selected_savegame(&self) -> Option<SavegameMeta> {
-        let index = self.base.selected_item().unwrap_or_default();
-        if index > 0 {
+        if let Some(index) = self.selected_item() {
             let data = self.data.borrow();
-            Some(data[index as usize - 1].clone())
+            Some(data[index as usize].clone())
         } else {
             None
         }
@@ -785,7 +914,7 @@ impl SavegameListView {
     fn check_row(&self, row: usize) {
         let data = self.data.borrow();
         for (i, savegame) in data.iter().enumerate() {
-            self.base.update_item(i + 1, nwg::InsertListViewItem { column_index: 0, index: Some(i as i32 + 1), text: Some(savegame.name.clone()), image: Some(if i == row { 2 } else { 1 }) });
+            self.update_item(i, nwg::InsertListViewItem { column_index: 0, index: Some(i as i32), text: Some(savegame.name.clone()), image: Some(if i == row { 2 } else { 1 }) });
         }
     }
 
@@ -793,7 +922,7 @@ impl SavegameListView {
         let data = self.data.borrow();
         for (i, savegame) in data.iter().enumerate() {
             if savegame.name == name {
-                self.select_item(i + 1, true);
+                self.select_item(i, true);
                 self.set_focus();
                 break;
             }
@@ -814,6 +943,7 @@ impl SavegameListViewBuilder {
     pub fn build(self, list: &mut SavegameListView) -> Result<(), nwg::NwgError> {
         self.list_builder.build(&mut list.base)?;
         list.prepare_list();
+        list.set_headers_enabled(true);
         Ok(())
     }
 }
