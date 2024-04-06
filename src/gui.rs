@@ -74,11 +74,21 @@ impl Default for SavegameManagerProfile {
     }
 }
 
+enum RenameMode {
+    Backup,
+    Profile,
+}
+
+impl Default for RenameMode {
+    fn default() -> Self { RenameMode::Backup }
+}
+
 #[derive(Default, NwgUi)]
 pub struct SavegameManagerApp {
     dummy_profile: RefCell<SavegameManagerProfile>,
     profiles_changed: RefCell<bool>,
     selected_backup: RefCell<Option<String>>,
+    rename_mode: RefCell<RenameMode>,
 
     #[nwg_resource(family: "Segoe UI Semibold", size: 16, weight: 400)]
     font_bold: nwg::Font,
@@ -706,8 +716,10 @@ impl SavegameManagerApp {
             let (width, height) = self.window.size();
             let (dialog_width, dialog_height) = self.rename_dialog.size();
 
+            *self.rename_mode.borrow_mut() = RenameMode::Backup;
             self.rename_input.set_text(savegame.name.as_str());
             self.rename_dialog.set_position(x + (width as i32 - dialog_width as i32) - 15, y + (height as i32 - dialog_height as i32) - 50);
+            self.rename_dialog.set_text("Rename backup");
             self.rename_dialog.set_visible(true);
             self.rename_input.set_selection(0..savegame.name.len() as u32);
             self.rename_input.set_focus();
@@ -715,29 +727,49 @@ impl SavegameManagerApp {
     }
 
     fn rename_confirm(&self) {
-        if let Some(savegame) = self.savegame_list.get_selected_savegame() {
-            let new_name: String = self.rename_input.text()
-                .replace("<", "").replace(">", "")
-                .replace(":", "").replace("\"", "")
-                .replace("/", "").replace("\\", "")
-                .replace("|", "").replace("?", "")
-                .replace("*", "").trim().to_owned();
-
-            if new_name.len() > 0 {
-                match backup::rename_backup(&self.get_current_profile().dst_path, &savegame.name, &new_name) {
-                    Ok(_) => {
-                        self.rename_dialog.set_visible(false);
-                        self.refresh_backup_list();
-                        self.savegame_list.select_by_name(new_name.as_str());
-                    },
-                    Err(err) => {
-                        println!("Error renaming backup: {:?}", err);
-                        nwg::modal_error_message(&self.rename_dialog, "Rename error", format!("Error renaming backup: {}", err).as_str());
+        match *self.rename_mode.borrow() {
+            RenameMode::Backup => {
+                if let Some(savegame) = self.savegame_list.get_selected_savegame() {
+                    let new_name: String = self.rename_input.text()
+                        .replace("<", "").replace(">", "")
+                        .replace(":", "").replace("\"", "")
+                        .replace("/", "").replace("\\", "")
+                        .replace("|", "").replace("?", "")
+                        .replace("*", "").trim().to_owned();
+        
+                    if new_name.len() > 0 {
+                        match backup::rename_backup(&self.get_current_profile().dst_path, &savegame.name, &new_name) {
+                            Ok(_) => {
+                                self.rename_dialog.set_visible(false);
+                                self.refresh_backup_list();
+                                self.savegame_list.select_by_name(new_name.as_str());
+                            },
+                            Err(err) => {
+                                println!("Error renaming backup: {:?}", err);
+                                nwg::modal_error_message(&self.rename_dialog, "Rename error", format!("Error renaming backup: {}", err).as_str());
+                            }
+                        }
+                    } else {
+                        nwg::modal_error_message(&self.rename_dialog, "Rename error", "The new name must not be empty");
                     }
                 }
-            } else {
-                nwg::modal_error_message(&self.rename_dialog, "Rename error", "The new name must not be empty");
-            }
+            },
+            RenameMode::Profile => {
+                let new_name = self.rename_input.text();
+                if new_name.len() > 0 {
+                    let mut profile = self.get_current_profile_mut();
+                    profile.name = new_name;
+                    drop(profile);
+
+                    let selection = self.profile_select.selection();
+
+                    self.profile_select.sync();
+                    self.profile_select.set_selection(selection);
+
+                    *self.profiles_changed.borrow_mut() = true;
+                    self.rename_dialog.set_visible(false);
+                }
+            },
         }
     }
 
@@ -807,6 +839,7 @@ impl SavegameManagerApp {
         }));
 
         *self.profiles_changed.borrow_mut() = true;
+        self.rename_dialog.set_visible(false);
         self.start_watcher();
         self.refresh_backup_list();
     }
@@ -842,7 +875,19 @@ impl SavegameManagerApp {
     }
 
     fn profile_rename(&self) {
-        
+        let profile = self.get_current_profile();
+
+        let (x, y) = self.window.position();
+        let (width, _) = self.window.size();
+        let (dialog_width, _) = self.rename_dialog.size();
+
+        *self.rename_mode.borrow_mut() = RenameMode::Profile;
+        self.rename_input.set_text(profile.name.as_str());
+        self.rename_dialog.set_position(x + (width as i32 - dialog_width as i32) - 15, y + 50);
+        self.rename_dialog.set_text("Rename profile");
+        self.rename_dialog.set_visible(true);
+        self.rename_input.set_selection(0..profile.name.len() as u32);
+        self.rename_input.set_focus();
     }
 
     fn profile_remove(&self) {
