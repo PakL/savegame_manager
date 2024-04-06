@@ -36,6 +36,14 @@ impl std::fmt::Display for ProfileIntervalUnit {
     }
 }
 
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct OldSavegameManagerSettings {
+    source_path: String,
+    dest_path: String,
+    disable_screenshots: bool,
+}
+
 fn default_true() -> bool { true }
 
 #[derive(Serialize, Deserialize)]
@@ -558,8 +566,21 @@ impl SavegameManagerApp {
                         json
                     },
                     Err(err) => {
-                        nwg::modal_error_message(&self.window, "Config file error", format!("Unable to parse config file. {:?}", err).as_str());
-                        vec![]
+                        match serde_json::from_reader::<File, OldSavegameManagerSettings>(File::open(DATA_FILE).unwrap()) {
+                            Ok(json) => {
+                                let mut p: SavegameManagerProfile = Default::default();
+                                p.name = "Default".to_owned();
+                                p.selected = true;
+                                p.src_path = json.source_path;
+                                p.dst_path = json.dest_path;
+                                p.screenshots = !json.disable_screenshots;
+                                vec![p]
+                            },
+                            Err(_) => {
+                                nwg::modal_error_message(&self.window, "Config file error", format!("Unable to parse config file. {:?}", err).as_str());
+                                vec![]
+                            }
+                        }
                     }
                 }
             },
