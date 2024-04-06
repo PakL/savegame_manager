@@ -114,6 +114,8 @@ pub fn create_autosave(src_path: &String, dst_path: &String, copy_screenshot: &b
             if auto_count >= *max_autosaves {
                 let _ = delete_backup(dst_path, &backup.name);
             }
+        } else if backup.is_temp() {
+            let _ = delete_backup(dst_path, &backup.name);
         }
     }
     drop(backup_list);
@@ -142,6 +144,17 @@ pub fn create_tempsave(src_path: &String, dst_path: &String, copy_screenshot: &b
 }
 
 pub fn create_savetokeep(src_path: &String, dst_path: &String, copy_screenshot: &bool) {
+    let _ = look_for_backups(dst_path);
+
+    let mut backup_list = BACKUP_LIST.lock().unwrap();
+    backup_list.sort_by(|a, b| b.date.cmp(&a.date));
+    for backup in &*backup_list {
+        if backup.is_temp() {
+            let _ = delete_backup(dst_path, &backup.name);
+        }
+    }
+    drop(backup_list);
+
     let now = chrono::Local::now();
     let backup_name = now.format("%Y-%m-%d_%H-%M-%S").to_string();
     create_backup(src_path, dst_path, &backup_name, copy_screenshot);

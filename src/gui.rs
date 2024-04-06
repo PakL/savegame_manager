@@ -409,8 +409,8 @@ impl SavegameManagerApp {
             if backup_name.len() > 0 {
                 let dst_path = self.get_current_profile().dst_path.clone();
                 match backup::get_meta_for_backup(&dst_path, &backup_name) {
-                    Ok(meta) => {
-                        self.savegame_list.unshift_savegame(meta);
+                    Ok(_) => {
+                        self.refresh_backup_list();
                     },
                     Err(err) => {
                         nwg::modal_error_message(&self.window, "Backup error", format!("Error reading backup meta: {:?}", err).as_str());
@@ -1018,19 +1018,16 @@ impl SavegameListView {
         self.insert_column(nwg::InsertListViewColumn { index: Some(1), fmt: Some(nwg::ListViewColumnFlags::LEFT), width: Some(300), text: Some("Date".to_owned()) });
     }
 
-    fn clear_list(&self, set_redraw: bool) {
-        if set_redraw {
+    fn clear_list(&self, disable_redraw: bool) {
+        if disable_redraw {
             self.set_redraw(false);
         }
 
-        let data = self.data.borrow();
-        let data_len = data.len();
-        drop(data);
-        for _ in 0..data_len {
-            self.remove_savegame(0);
-        }
+        let mut data = self.data.borrow_mut();
+        data.clear();
+        self.clear();
 
-        if set_redraw {
+        if disable_redraw {
             self.set_redraw(true);
         }
     }
@@ -1052,27 +1049,26 @@ impl SavegameListView {
         self.update_item(index, row[1].clone());
     }
 
-    fn unshift_savegame(&self, meta: SavegameMeta) {
-        let mut data = self.data.borrow_mut();
-        let index = data.len();
-        data.insert(0, meta.clone());
-        drop(data);
-
-        self.insert_item(nwg::InsertListViewItem { column_index: 0, index: Some(index as i32), text: Some("-".to_owned()), image: None });
-
-        self.update_list(true);
-        self.check_row(0);
-    }
-
-    fn update_list(&self, set_redraw: bool) {
+    fn update_list(&self, disable_redraw: bool) {
         let mut data = self.data.borrow_mut();
         data.sort_by(|a, b| b.date.cmp(&a.date));
         drop(data);
 
         let data = self.data.borrow();
 
-        if set_redraw {
+        if disable_redraw {
             self.set_redraw(false);
+        }
+
+        let mut diff: i32 = data.len() as i32 - self.len() as i32;
+        while diff != 0 {
+            if diff > 0 {
+                self.insert_item(nwg::InsertListViewItem { column_index: 0, index: None, text: None, image: None });
+                diff -= 1;
+            } else if diff < 0 {
+                self.remove_item(self.len());
+                diff += 1;
+            }
         }
 
         let mut index = 0;
@@ -1085,16 +1081,9 @@ impl SavegameListView {
             index += 1;
         }
 
-        if set_redraw {
-            self.base.set_redraw(true);
+        if disable_redraw {
+            self.set_redraw(true);
         }
-    }
-
-    fn remove_savegame(&self, index: usize) {
-        let mut data = self.data.borrow_mut();
-        data.remove(index);
-
-        self.base.remove_item(index);
     }
 
     fn get_selected_savegame(&self) -> Option<SavegameMeta> {
