@@ -15,7 +15,7 @@ const NO_PADDING: Rect<D> = Rect { start: D::Points(0.0), end: D::Points(0.0), t
 const PADDING_LEFT: Rect<D> = Rect { start: D::Points(5.0), end: D::Points(0.0), top: D::Points(0.0), bottom: D::Points(0.0) };
 const DATA_FILE: &str = "savegame_manager.json";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 enum ProfileIntervalUnit {
     Seconds,
     Minutes,
@@ -24,6 +24,16 @@ enum ProfileIntervalUnit {
 
 impl Default for ProfileIntervalUnit {
     fn default() -> Self { ProfileIntervalUnit::Minutes }
+}
+
+impl std::fmt::Display for ProfileIntervalUnit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Seconds => "seconds",
+            Self::Minutes => "minutes",
+            Self::Hours => "hours"
+        })
+    }
 }
 
 fn default_true() -> bool { true }
@@ -105,7 +115,7 @@ pub struct SavegameManagerApp {
     profile_layout: nwg::FlexboxLayout,
 
     #[nwg_control(parent: profile_frame)]
-    #[nwg_layout_item(layout: profile_layout, size: Size { width: D::Auto, height: D::Auto }, margin: Rect { start: D::Points(0.0), top: D::Points(0.0), bottom: D::Points(0.0), end: D::Points(10.0) }, flex_grow: 1.0)]
+    #[nwg_layout_item(layout: profile_layout, size: Size { width: D::Auto, height: D::Auto }, margin: Rect { start: D::Points(0.0), top: D::Points(1.0), bottom: D::Points(0.0), end: D::Points(10.0) }, flex_grow: 1.0)]
     #[nwg_events(OnComboxBoxSelection: [SavegameManagerApp::profile_select_change])]
     profile_select: nwg::ComboBox<SavegameManagerProfile>,
 
@@ -130,13 +140,13 @@ pub struct SavegameManagerApp {
 
 // region: Source folder selection
     #[nwg_control(parent: window, flags: "VISIBLE")]
-    #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Points(25.0) })]
+    #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Points(23.0) })]
     source_frame: nwg::Frame,
 
     #[nwg_layout(parent: source_frame, flex_direction: FlexDirection::Row, padding: NO_PADDING)]
     source_layout: nwg::FlexboxLayout,
 
-    #[nwg_control(parent: source_frame, text: "Source:")]
+    #[nwg_control(parent: source_frame, text: "Source:", v_align: nwg::VTextAlign::Center)]
     #[nwg_layout_item(layout: source_layout, size: Size { width: D::Points(100.0), height: D::Auto })]
     source_label: nwg::Label,
 
@@ -148,13 +158,13 @@ pub struct SavegameManagerApp {
 
 // region: Destination folder selection
     #[nwg_control(parent: window, flags: "VISIBLE")]
-    #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Points(25.0) })]
+    #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Points(23.0) })]
     dest_frame: nwg::Frame,
 
     #[nwg_layout(parent: dest_frame, flex_direction: FlexDirection::Row, padding: NO_PADDING)]
     dest_layout: nwg::FlexboxLayout,
 
-    #[nwg_control(parent: dest_frame, text: "Backup:")]
+    #[nwg_control(parent: dest_frame, text: "Backup:", v_align: nwg::VTextAlign::Center)]
     #[nwg_layout_item(layout: dest_layout, size: Size { width: D::Points(100.0), height: D::Auto })]
     dest_label: nwg::Label,
 
@@ -164,8 +174,9 @@ pub struct SavegameManagerApp {
     dest_button: nwg::Button,
 // endregion
 
+// region: Checkboxes
     #[nwg_control(parent: window, flags: "VISIBLE")]
-    #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Points(25.0) })]
+    #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Points(23.0) })]
     checkboxes_frame: nwg::Frame,
 
     #[nwg_layout(parent: checkboxes_frame, margin: [0,0,0,0], spacing: 0)]
@@ -180,7 +191,36 @@ pub struct SavegameManagerApp {
     #[nwg_layout_item(layout: checkboxes_layout, col: 1, row: 0)]
     #[nwg_events(OnButtonClick: [SavegameManagerApp::manual_save_checkbox_click])]
     manual_save_detection_check: nwg::CheckBox,
+// endregion
 
+// region: autosave settings
+    #[nwg_control(parent: window, flags: "VISIBLE")]
+    #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Points(23.0)})]
+    autosave_frame: nwg::Frame,
+
+    #[nwg_layout(parent: autosave_frame, flex_direction: FlexDirection::Row, padding: NO_PADDING)]
+    autosave_layout: nwg::FlexboxLayout,
+
+    #[nwg_control(parent: autosave_frame, text: "Max. autosaves: ", h_align: nwg::HTextAlign::Right, v_align: nwg::VTextAlign::Center)]
+    #[nwg_layout_item(layout: autosave_layout, size: Size { width: D::Points(90.0), height: D::Auto })]
+    autosave_lbl_amount: nwg::Label,
+
+    #[nwg_control(parent: autosave_frame, flags: "VISIBLE|NUMBER")]
+    #[nwg_layout_item(layout: autosave_layout, size: Size { width: D::Auto, height: D::Auto }, flex_grow: 1.0, margin: PADDING_LEFT)]
+    autosave_amount: nwg::TextInput,
+
+    #[nwg_control(parent: autosave_frame, text: "in intervals of: ", h_align: nwg::HTextAlign::Right, v_align: nwg::VTextAlign::Center)]
+    #[nwg_layout_item(layout: autosave_layout, size: Size { width: D::Points(90.0), height: D::Auto })]
+    autosave_lbl_interval: nwg::Label,
+
+    #[nwg_control(parent: autosave_frame, flags: "VISIBLE|NUMBER")]
+    #[nwg_layout_item(layout: autosave_layout, size: Size { width: D::Auto, height: D::Auto }, flex_grow: 1.0, margin: PADDING_LEFT)]
+    autosave_interval: nwg::TextInput,
+
+    #[nwg_control(parent: autosave_frame)]
+    #[nwg_layout_item(layout: autosave_layout, size: Size { width: D::Points(100.0), height: D::Auto }, margin: PADDING_LEFT)]
+    autosave_interval_unit: nwg::ComboBox<ProfileIntervalUnit>,
+// endregion
 
     #[nwg_control(parent: window, flags: "VISIBLE")]
     #[nwg_layout_item(layout: layout, size: Size { width: D::Auto, height: D::Auto }, flex_grow: 1.0)]
@@ -450,6 +490,8 @@ impl SavegameManagerApp {
         self.tooltip.register_callback(&self.profile_add);
         self.tooltip.register_callback(&self.profile_rename);
         self.tooltip.register_callback(&self.profile_remove);
+
+        self.autosave_interval_unit.set_collection(vec![ProfileIntervalUnit::Seconds, ProfileIntervalUnit::Minutes, ProfileIntervalUnit::Hours]);
 
         let mut profiles: Vec<SavegameManagerProfile> = match File::open(DATA_FILE) {
             Ok(file) => {
