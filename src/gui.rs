@@ -78,6 +78,7 @@ impl Default for SavegameManagerProfile {
 pub struct SavegameManagerApp {
     dummy_profile: RefCell<SavegameManagerProfile>,
     profiles_changed: RefCell<bool>,
+    selected_backup: RefCell<Option<String>>,
 
     #[nwg_resource(family: "Segoe UI Semibold", size: 16, weight: 400)]
     font_bold: nwg::Font,
@@ -536,7 +537,6 @@ impl SavegameManagerApp {
         self.profile_select.set_collection(profiles);
         self.profile_select.set_selection(selected_index);
         self.profile_select_change();
-        self.refresh_backup_list();
     }
 
     fn open_dialog(title: &str, handle: &nwg::ControlHandle) -> Result<nwg::FileDialog, nwg::NwgError> {
@@ -601,8 +601,18 @@ impl SavegameManagerApp {
     }
 
     fn show_details(&self) {
+        let last_backup = self.selected_backup.borrow();
+
         match self.savegame_list.get_selected_savegame() {
             Some(savegame) => {
+                if let Some(last) = last_backup.as_ref() {
+                    if *last == savegame.name {
+                        return;
+                    }
+                }
+                drop(last_backup);
+                *self.selected_backup.borrow_mut() = Some(savegame.name.clone());
+
                 self.savegame_detail_name_content.set_text(savegame.name.as_str());
                 self.savegame_detail_date_content.set_text(local_datetime_from_millis(savegame.date).format("%c").to_string().as_str());
                 self.savegame_detail_checksums_content.set_text(savegame.checksums.iter().map(|c| {
@@ -628,6 +638,12 @@ impl SavegameManagerApp {
                 self.savegame_delete.set_enabled(true);
             },
             None => {
+                if last_backup.is_none() {
+                    return;
+                }
+                drop(last_backup);
+                *self.selected_backup.borrow_mut() = None;
+
                 self.savegame_detail_name_content.set_text("-");
                 self.savegame_detail_date_content.set_text("-");
                 self.savegame_detail_checksums_content.set_text("-");
@@ -764,6 +780,10 @@ impl SavegameManagerApp {
         }
 
         let selection = self.profile_select.selection();
+
+        let mut autosave_amount = String::new();
+        let mut autosave_interval = String::new();
+        let mut autosave_interval_unit = ProfileIntervalUnit::Minutes;
         if let Some(selection) = selection {
             profiles[selection].selected = true;
 
@@ -771,15 +791,20 @@ impl SavegameManagerApp {
             self.dest_button.set_text(if profiles[selection].dst_path.len() > 0 { profiles[selection].dst_path.as_str() } else { "Select backup path" });
             self.screenshots_check.set_check_state(if profiles[selection].screenshots { nwg::CheckBoxState::Checked } else { nwg::CheckBoxState::Unchecked });
             self.manual_save_detection_check.set_check_state(if profiles[selection].manual_save_detection { nwg::CheckBoxState::Checked } else { nwg::CheckBoxState::Unchecked });
-            self.autosave_amount.set_text(format!("{}", profiles[selection].auto_saves_max).as_str());
-            self.autosave_interval.set_text(format!("{}", profiles[selection].auto_saves_interval).as_str());
-            self.autosave_interval_unit.set_selection(Some(match profiles[selection].auto_saves_interval_unit {
-                ProfileIntervalUnit::Seconds => 0,
-                ProfileIntervalUnit::Minutes => 1,
-                ProfileIntervalUnit::Hours => 2,
-            }));
+
+            autosave_amount = format!("{}", profiles[selection].auto_saves_max);
+            autosave_interval = format!("{}", profiles[selection].auto_saves_interval);
+            autosave_interval_unit = profiles[selection].auto_saves_interval_unit.clone();
         }
         drop(profiles);
+
+        self.autosave_amount.set_text(autosave_amount.as_str());
+        self.autosave_interval.set_text(autosave_interval.as_str());
+        self.autosave_interval_unit.set_selection(Some(match autosave_interval_unit {
+            ProfileIntervalUnit::Seconds => 0,
+            ProfileIntervalUnit::Minutes => 1,
+            ProfileIntervalUnit::Hours => 2,
+        }));
 
         *self.profiles_changed.borrow_mut() = true;
         self.start_watcher();
