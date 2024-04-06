@@ -16,7 +16,7 @@ const PADDING_LEFT: Rect<D> = Rect { start: D::Points(5.0), end: D::Points(0.0),
 const DATA_FILE: &str = "savegame_manager.json";
 
 #[derive(Clone, Serialize, Deserialize)]
-enum ProfileIntervalUnit {
+pub enum ProfileIntervalUnit {
     Seconds,
     Minutes,
     Hours,
@@ -424,6 +424,46 @@ impl SavegameManagerApp {
         write_to_rwlock(&WATCHER_HAS_CHANGES, false);
     }
 
+    fn start_backup(&self, src_path: String, dst_path: String, copy_screenshot: bool, wait: bool) {
+        let mut backup_type: u8 = 0;
+
+        if self.get_current_profile().manual_save_detection {
+            let live_hashes = backup::create_hash_list(&src_path);
+
+            if let Some(savegame) = self.savegame_list.get_latest_non_temp() {
+                let hash_cmp = backup::hash_list_cmp(&live_hashes, &savegame.checksums);
+                match hash_cmp {
+                    backup::BackupComparison::CompleteDiff => { backup_type = 0; },
+                    backup::BackupComparison::PartialDiff => {
+                        let profile = self.get_current_profile();
+                        if chrono::Local::now().timestamp_millis() - savegame.date > interval_duration(profile.auto_saves_interval, &profile.auto_saves_interval_unit) {
+                            backup_type = 2;
+                        } else {
+                            backup_type = 1;
+                        }
+                    },
+                    backup::BackupComparison::NoDiff => { backup_type = 3; },
+                }
+            }
+        }
+
+        let autosave_max = self.get_current_profile().auto_saves_max.clone();
+        let fun = move || {
+            match backup_type {
+                0 => backup::create_savetokeep(&src_path, &dst_path, &copy_screenshot),
+                1 => backup::create_tempsave(&src_path, &dst_path, &copy_screenshot),
+                2 => backup::create_autosave(&src_path, &dst_path, &copy_screenshot, &autosave_max),
+                _ => {}
+            }
+        };
+
+        if wait {
+            fun();
+        } else {
+            std::thread::spawn(fun);
+        }
+    }
+
     fn tick_backup(&self, wait_for_screenshot: bool) {
         match read_rwlock_or(&BACKUP_STATE, backup::BackupState::Idle) {
             backup::BackupState::Idle => {
@@ -438,12 +478,7 @@ impl SavegameManagerApp {
                     let copy_screenshot = data.screenshots;
                     drop(data);
 
-
-                    if self.get_current_profile().manual_save_detection {
-                        // TODO: check for auto/manual saves
-                    } else {
-                        std::thread::spawn(move || backup::create_savetokeep(&src_path, &dst_path, &copy_screenshot));
-                    }
+                    self.start_backup(src_path, dst_path, copy_screenshot, false);
                 }
             },
             backup::BackupState::Busy => {},
@@ -487,7 +522,7 @@ impl SavegameManagerApp {
                 let mut found_current_backup = false;
                 let live_hashes = backup::create_hash_list(&src_path);
                 for (i, backup) in (&*self.savegame_list.data.borrow()).iter().enumerate() {
-                    if backup::hash_list_cmp(&live_hashes, &backup.checksums) {
+                    if !!backup::hash_list_cmp(&live_hashes, &backup.checksums) {
                         self.savegame_list.check_row(i);
                         found_current_backup = true;
                         break;
@@ -495,9 +530,8 @@ impl SavegameManagerApp {
                 }
 
                 if !found_current_backup {
-                    // TODO: fix this
-                    // backup::create_backup(&src_path, &dst_path, &false);
-                    // self.finish_up_backup();
+                    self.start_backup(src_path, dst_path, false, false);
+                    self.finish_up_backup();
                 }
 
             },
@@ -954,6 +988,16 @@ impl SavegameListView {
                 .flags(nwg::ListViewFlags::VISIBLE | nwg::ListViewFlags::SINGLE_SELECTION | nwg::ListViewFlags::ALWAYS_SHOW_SELECTION)
                 .ex_flags(nwg::ListViewExFlags::FULL_ROW_SELECT | nwg::ListViewExFlags::GRID | nwg::ListViewExFlags::AUTO_COLUMN_SIZE)
         }
+    }
+
+    fn get_latest_non_temp(&self) -> Option<SavegameMeta> {
+        let data = self.data.borrow();
+        for savegame in data.iter() {
+            if !savegame.is_temp() {
+                return Some(savegame.clone());
+            }
+        }
+        None
     }
 
     fn prepare_list(&self) {

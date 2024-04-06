@@ -22,3 +22,11 @@ pub fn local_datetime_from_millis(millis: i64) -> chrono::DateTime<chrono::Local
         _ => chrono::Local::now(),
     }
 }
+
+pub fn interval_duration(interval: u16, interval_unit: &crate::gui::ProfileIntervalUnit) -> i64 {
+    match interval_unit {
+        crate::gui::ProfileIntervalUnit::Seconds => interval as i64 * 1_000,
+        crate::gui::ProfileIntervalUnit::Minutes => interval as i64 * 60 * 1_000,
+        crate::gui::ProfileIntervalUnit::Hours => interval as i64 * 60 * 60 * 1_000,
+    }
+}

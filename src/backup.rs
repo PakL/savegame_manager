@@ -1,7 +1,7 @@
 use crate::*;
 
 use trash::delete;
-use std::{fs::File, path::PathBuf, sync::RwLock};
+use std::{fs::File, path::PathBuf, sync::{Mutex, RwLock}};
 use serde::{Serialize, Deserialize};
 
 #[derive(Clone)]
@@ -15,12 +15,24 @@ pub static BACKUP_STATE: RwLock<BackupState> = RwLock::new(BackupState::Idle);
 pub static BACKUP_ERROR: RwLock<String> = RwLock::new(String::new());
 pub static BACKUP_NAME: RwLock<String> = RwLock::new(String::new());
 
+pub static BACKUP_PATH: Mutex<String> = Mutex::new(String::new());
+pub static BACKUP_LIST: Mutex<Vec<SavegameMeta>> = Mutex::new(vec![]);
+
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct SavegameMeta {
     #[serde(skip)] pub name: String,
     pub date: i64,
     pub checksums: Vec<(String, String)>,
+}
+
+impl SavegameMeta {
+    pub fn is_temp(&self) -> bool {
+        self.name.starts_with("temp_")
+    }
+    pub fn is_auto(&self) -> bool {
+        self.name.starts_with("auto_")
+    }
 }
 
 fn take_backup(src_path: &String, dst_path: &String, backup_name: &String, copy_screenshot: &bool) -> Result<(), anyhow::Error> {
@@ -90,15 +102,42 @@ pub fn create_backup(src_path: &String, dst_path: &String, backup_name: &String,
     }
 }
 
-pub fn create_autosave(src_path: &String, dst_path: &String, copy_screenshot: &bool) {
+pub fn create_autosave(src_path: &String, dst_path: &String, copy_screenshot: &bool, max_autosaves: &u16) {
+    let _ = look_for_backups(dst_path);
+
+    let mut backup_list = BACKUP_LIST.lock().unwrap();
+    backup_list.sort_by(|a, b| b.date.cmp(&a.date));
+    let mut auto_count = 0;
+    for backup in &*backup_list {
+        if backup.is_auto() {
+            auto_count += 1;
+            if auto_count >= *max_autosaves {
+                let _ = delete_backup(dst_path, &backup.name);
+            }
+        }
+    }
+    drop(backup_list);
+
     let now = chrono::Local::now();
     let backup_name = now.format("auto_%Y-%m-%d_%H-%M-%S").to_string();
     create_backup(src_path, dst_path, &backup_name, copy_screenshot);
 }
 
 pub fn create_tempsave(src_path: &String, dst_path: &String, copy_screenshot: &bool) {
+    let _ = look_for_backups(dst_path);
+
+    let mut backup_list = BACKUP_LIST.lock().unwrap();
+    backup_list.sort_by(|a, b| b.date.cmp(&a.date));
+    for backup in &*backup_list {
+        if backup.is_temp() {
+            let _ = delete_backup(dst_path, &backup.name);
+        }
+    }
+    drop(backup_list);
+
     let now = chrono::Local::now();
     let backup_name = now.format("temp_%Y-%m-%d_%H-%M-%S").to_string();
+
     create_backup(src_path, dst_path, &backup_name, copy_screenshot);
 }
 
@@ -109,6 +148,19 @@ pub fn create_savetokeep(src_path: &String, dst_path: &String, copy_screenshot: 
 }
 
 pub fn get_meta_for_backup(dst_path: &String, backup_name: &String) -> Result<SavegameMeta, anyhow::Error> {
+    let mut last_backup_path = BACKUP_PATH.lock().unwrap();
+    if *last_backup_path != *dst_path {
+        *last_backup_path = dst_path.clone();
+        BACKUP_LIST.lock().unwrap().clear();
+    }
+
+    for backup in &*BACKUP_LIST.lock().unwrap() {
+        if backup.name == *backup_name {
+            return Ok(backup.clone());
+        }
+    }
+    
+
     let bak_pathbuf = PathBuf::from(dst_path).join(backup_name);
     
     if bak_pathbuf.exists() && bak_pathbuf.is_dir() {
@@ -117,6 +169,7 @@ pub fn get_meta_for_backup(dst_path: &String, backup_name: &String) -> Result<Sa
             let meta_file = File::open(meta_file_path)?;
             let mut meta: SavegameMeta = serde_json::from_reader(meta_file)?;
             meta.name = backup_name.clone();
+            BACKUP_LIST.lock().unwrap().push(meta.clone());
             Ok(meta)
         } else {
             Err(anyhow::anyhow!("Backup meta file does not exist"))
@@ -167,30 +220,54 @@ pub fn create_hash_list(path: &String) -> Vec<(String, String)> {
     hash_list
 }
 
-pub fn hash_list_cmp(hashes: &Vec<(String, String)>, cmp_with: &Vec<(String, String)>) -> bool {
-    if hashes.len() != cmp_with.len() {
-        return false;
+pub enum BackupComparison {
+    CompleteDiff,
+    PartialDiff,
+    NoDiff,
+}
+
+impl std::ops::Not for BackupComparison {
+    type Output = bool;
+
+    fn not(self) -> Self::Output {
+        match self {
+            BackupComparison::CompleteDiff => true,
+            BackupComparison::PartialDiff => true,
+            BackupComparison::NoDiff => false,
+        }
     }
+}
+
+pub fn hash_list_cmp(hashes: &Vec<(String, String)>, cmp_with: &Vec<(String, String)>) -> BackupComparison {
+    let mut some_matches = false;
+    let mut all_matches = true;
 
     for hash in hashes {
-        let mut hash_found = false;
+        let mut file_found = false;
         for cmp_hash in cmp_with {
             if hash.0 == cmp_hash.0 {
+                file_found = true;
                 if hash.1 != cmp_hash.1 {
-                    return false;
+                    all_matches = false;
                 } else {
-                    hash_found = true;
-                    break;
+                    some_matches = true;
                 }
+                break;
             }
         }
 
-        if !hash_found {
-            return false;
+        if !file_found {
+            all_matches = false;
         }
     }
 
-    true
+    if all_matches {
+        BackupComparison::NoDiff
+    } else if some_matches {
+        BackupComparison::PartialDiff
+    } else {
+        BackupComparison::CompleteDiff
+    }
 }
 
 pub fn load_backup(src_path: &String, dst_path: &String, backup: &SavegameMeta) -> Result<(), anyhow::Error> {
