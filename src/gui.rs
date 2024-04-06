@@ -437,7 +437,13 @@ impl SavegameManagerApp {
                     let dst_path = data.dst_path.clone();
                     let copy_screenshot = data.screenshots;
                     drop(data);
-                    std::thread::spawn(move || backup::create_backup(&src_path, &dst_path, &copy_screenshot));
+
+
+                    if self.get_current_profile().manual_save_detection {
+                        // TODO: check for auto/manual saves
+                    } else {
+                        std::thread::spawn(move || backup::create_savetokeep(&src_path, &dst_path, &copy_screenshot));
+                    }
                 }
             },
             backup::BackupState::Busy => {},
@@ -489,8 +495,9 @@ impl SavegameManagerApp {
                 }
 
                 if !found_current_backup {
-                    backup::create_backup(&src_path, &dst_path, &false);
-                    self.finish_up_backup();
+                    // TODO: fix this
+                    // backup::create_backup(&src_path, &dst_path, &false);
+                    // self.finish_up_backup();
                 }
 
             },
@@ -790,7 +797,7 @@ impl SavegameManagerApp {
             let result = nwg::modal_message(&self.window, &nwg::MessageParams { title: "Deleting backup", content: format!("Are you sure you want to delete {}?\n(We'll just move it to the recycle bin for your.)", savegame.name).as_str(), buttons: nwg::MessageButtons::YesNo, icons: nwg::MessageIcons::Question });
             match result {
                 nwg::MessageChoice::Yes => {
-                    match crate::backup::remove_backup(&self.get_current_profile().dst_path, &savegame.name) {
+                    match crate::backup::recycle_backup(&self.get_current_profile().dst_path, &savegame.name) {
                         Ok(_) => {
                             self.refresh_backup_list();
                         },
@@ -891,6 +898,11 @@ impl SavegameManagerApp {
     }
 
     fn profile_remove(&self) {
+        if self.profile_select.collection().len() == 1 {
+            nwg::modal_info_message(&self.window, "Sorry Dave, I'm afraid I can't do that.", "You need at least one profile.");
+            return;
+        }
+
         let result = nwg::modal_message(&self.window, &nwg::MessageParams { title: "Deleting profile", content: "Are you sure you want to delete the selected profile?", buttons: nwg::MessageButtons::YesNo, icons: nwg::MessageIcons::Question });
         match result {
             nwg::MessageChoice::Yes => {

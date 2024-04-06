@@ -23,12 +23,9 @@ pub struct SavegameMeta {
     pub checksums: Vec<(String, String)>,
 }
 
-fn take_backup(src_path: &String, dst_path: &String, copy_screenshot: &bool) -> Result<String, anyhow::Error> {
-    let now = chrono::Local::now();
-    let backup_name = now.format("%Y-%m-%d_%H-%M-%S").to_string();
-
+fn take_backup(src_path: &String, dst_path: &String, backup_name: &String, copy_screenshot: &bool) -> Result<(), anyhow::Error> {
     let src_pathbuf = PathBuf::from(src_path);
-    let dst_pathbuf = PathBuf::from(dst_path).join(&backup_name);
+    let dst_pathbuf = PathBuf::from(dst_path).join(backup_name);
 
     std::fs::create_dir(&dst_pathbuf)?;
 
@@ -62,12 +59,14 @@ fn take_backup(src_path: &String, dst_path: &String, copy_screenshot: &bool) -> 
     }
 
     let meta_file = File::create(dst_pathbuf.join("meta.json"))?;
+    let now = chrono::Local::now();
     serde_json::to_writer_pretty(meta_file, &SavegameMeta { name: backup_name.clone(), date: now.timestamp_millis(), checksums: meta_checksums })?;
 
-    Ok(backup_name)
+    Ok(())
 }
 
-pub fn create_backup(src_path: &String, dst_path: &String, copy_screenshot: &bool) {
+
+pub fn create_backup(src_path: &String, dst_path: &String, backup_name: &String, copy_screenshot: &bool) {
     if src_path.is_empty() || dst_path.is_empty() {
         println!("Source or destination path is empty");
         write_to_rwlock(&BACKUP_ERROR, String::new());
@@ -76,10 +75,10 @@ pub fn create_backup(src_path: &String, dst_path: &String, copy_screenshot: &boo
         return;
     }
 
-    match take_backup(src_path, dst_path, copy_screenshot) {
-        Ok(backup_name) => {
+    match take_backup(src_path, dst_path, &backup_name, copy_screenshot) {
+        Ok(_) => {
             write_to_rwlock(&BACKUP_ERROR, String::new());
-            write_to_rwlock(&BACKUP_NAME, backup_name);
+            write_to_rwlock(&BACKUP_NAME, backup_name.clone());
             write_to_rwlock(&BACKUP_STATE, BackupState::Finished);
         },
         Err(err) => {
@@ -89,6 +88,24 @@ pub fn create_backup(src_path: &String, dst_path: &String, copy_screenshot: &boo
             write_to_rwlock(&BACKUP_STATE, BackupState::Finished);
         }
     }
+}
+
+pub fn create_autosave(src_path: &String, dst_path: &String, copy_screenshot: &bool) {
+    let now = chrono::Local::now();
+    let backup_name = now.format("auto_%Y-%m-%d_%H-%M-%S").to_string();
+    create_backup(src_path, dst_path, &backup_name, copy_screenshot);
+}
+
+pub fn create_tempsave(src_path: &String, dst_path: &String, copy_screenshot: &bool) {
+    let now = chrono::Local::now();
+    let backup_name = now.format("temp_%Y-%m-%d_%H-%M-%S").to_string();
+    create_backup(src_path, dst_path, &backup_name, copy_screenshot);
+}
+
+pub fn create_savetokeep(src_path: &String, dst_path: &String, copy_screenshot: &bool) {
+    let now = chrono::Local::now();
+    let backup_name = now.format("%Y-%m-%d_%H-%M-%S").to_string();
+    create_backup(src_path, dst_path, &backup_name, copy_screenshot);
 }
 
 pub fn get_meta_for_backup(dst_path: &String, backup_name: &String) -> Result<SavegameMeta, anyhow::Error> {
@@ -206,11 +223,20 @@ pub fn rename_backup(dst_path: &String, old_name: &String, new_name: &String) ->
     }
 }
 
-pub fn remove_backup(dst_path: &String, backup_name: &String) -> Result<(), trash::Error> {
+pub fn recycle_backup(dst_path: &String, backup_name: &String) -> Result<(), trash::Error> {
     let backup_path = PathBuf::from(dst_path).join(backup_name);
 
     if backup_path.exists() && backup_path.is_dir() {
         delete(backup_path)
+    } else {
+        Ok(())
+    }
+}
+
+pub fn delete_backup(dst_path: &String, backup_name: &String) -> Result<(), std::io::Error> {
+    let backup_path = PathBuf::from(dst_path).join(backup_name);
+    if backup_path.exists() && backup_path.is_dir() {
+        std::fs::remove_dir_all(backup_path)
     } else {
         Ok(())
     }
