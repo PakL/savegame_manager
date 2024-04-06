@@ -302,6 +302,25 @@ pub fn load_backup(src_path: &String, dst_path: &String, backup: &SavegameMeta) 
     Ok(())
 }
 
+pub fn deal_with_exit_save(dst_path: &String) {
+    let _ = look_for_backups(dst_path);
+
+    let mut backup_list = BACKUP_LIST.lock().unwrap();
+    backup_list.sort_by(|a, b| b.date.cmp(&a.date));
+    let mut first_temp = true;
+    for backup in &*backup_list {
+        if backup.is_temp() {
+            if first_temp {
+                let _ = rename_backup(dst_path, &backup.name, &backup.name.replace("temp_", "exit_"));
+                first_temp = false;
+            } else {
+                let _ = delete_backup(dst_path, &backup.name);
+            }
+        }
+    }
+    drop(backup_list);
+}
+
 pub fn rename_backup(dst_path: &String, old_name: &String, new_name: &String) -> std::io::Result<()> {
     let old_path = PathBuf::from(dst_path).join(old_name);
     let new_path = PathBuf::from(dst_path).join(new_name);

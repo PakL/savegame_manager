@@ -358,10 +358,13 @@ impl SavegameManagerApp {
             }
         }
 
+        backup::deal_with_exit_save(&self.get_current_profile().dst_path);
+
         let screenshot_file = PathBuf::from("screenshot.jpg");
         if screenshot_file.exists() && screenshot_file.is_file() {
             std::fs::remove_file(screenshot_file).unwrap_or_default();
         }
+
 
         nwg::stop_thread_dispatch();
     }
