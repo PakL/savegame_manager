@@ -207,6 +207,7 @@ pub struct SavegameManagerApp {
 
     #[nwg_control(parent: autosave_frame, flags: "VISIBLE|NUMBER")]
     #[nwg_layout_item(layout: autosave_layout, size: Size { width: D::Auto, height: D::Auto }, flex_grow: 1.0, margin: PADDING_LEFT)]
+    #[nwg_events(OnTextInput: [SavegameManagerApp::autosave_text_input(SELF, HANDLE)])]
     autosave_amount: nwg::TextInput,
 
     #[nwg_control(parent: autosave_frame, text: "in intervals of: ", h_align: nwg::HTextAlign::Right, v_align: nwg::VTextAlign::Center)]
@@ -215,10 +216,12 @@ pub struct SavegameManagerApp {
 
     #[nwg_control(parent: autosave_frame, flags: "VISIBLE|NUMBER")]
     #[nwg_layout_item(layout: autosave_layout, size: Size { width: D::Auto, height: D::Auto }, flex_grow: 1.0, margin: PADDING_LEFT)]
+    #[nwg_events(OnTextInput: [SavegameManagerApp::autosave_text_input(SELF, HANDLE)])]
     autosave_interval: nwg::TextInput,
 
     #[nwg_control(parent: autosave_frame)]
     #[nwg_layout_item(layout: autosave_layout, size: Size { width: D::Points(100.0), height: D::Auto }, margin: PADDING_LEFT)]
+    #[nwg_events(OnComboxBoxSelection: [SavegameManagerApp::interval_unit_select_change])]
     autosave_interval_unit: nwg::ComboBox<ProfileIntervalUnit>,
 // endregion
 
@@ -532,6 +535,7 @@ impl SavegameManagerApp {
 
         self.profile_select.set_collection(profiles);
         self.profile_select.set_selection(selected_index);
+        self.profile_select_change();
         self.refresh_backup_list();
     }
 
@@ -763,10 +767,17 @@ impl SavegameManagerApp {
         if let Some(selection) = selection {
             profiles[selection].selected = true;
 
-            self.source_button.set_text(profiles[selection].src_path.as_str());
-            self.dest_button.set_text(profiles[selection].dst_path.as_str());
+            self.source_button.set_text(if profiles[selection].src_path.len() > 0 { profiles[selection].src_path.as_str() } else { "Select source path" });
+            self.dest_button.set_text(if profiles[selection].dst_path.len() > 0 { profiles[selection].dst_path.as_str() } else { "Select backup path" });
             self.screenshots_check.set_check_state(if profiles[selection].screenshots { nwg::CheckBoxState::Checked } else { nwg::CheckBoxState::Unchecked });
             self.manual_save_detection_check.set_check_state(if profiles[selection].manual_save_detection { nwg::CheckBoxState::Checked } else { nwg::CheckBoxState::Unchecked });
+            self.autosave_amount.set_text(format!("{}", profiles[selection].auto_saves_max).as_str());
+            self.autosave_interval.set_text(format!("{}", profiles[selection].auto_saves_interval).as_str());
+            self.autosave_interval_unit.set_selection(Some(match profiles[selection].auto_saves_interval_unit {
+                ProfileIntervalUnit::Seconds => 0,
+                ProfileIntervalUnit::Minutes => 1,
+                ProfileIntervalUnit::Hours => 2,
+            }));
         }
         drop(profiles);
 
@@ -823,6 +834,23 @@ impl SavegameManagerApp {
             },
             _ => {}
         }
+    }
+
+    fn autosave_text_input(&self, handle: &nwg::ControlHandle) {
+        let mut profile = self.get_current_profile_mut();
+        if handle == &self.autosave_amount {
+            profile.auto_saves_max = self.autosave_amount.text().parse().unwrap_or(0);
+        } else if handle == &self.autosave_interval {
+            profile.auto_saves_interval = self.autosave_interval.text().parse().unwrap_or(0);
+        }
+        *self.profiles_changed.borrow_mut() = true;
+    }
+
+    fn interval_unit_select_change(&self) {
+        let mut profile = self.get_current_profile_mut();
+        let collection = self.autosave_interval_unit.collection();
+        profile.auto_saves_interval_unit = collection[self.autosave_interval_unit.selection().unwrap_or(0)].clone();
+        *self.profiles_changed.borrow_mut() = true;
     }
 }
 
