@@ -3,7 +3,15 @@ use crate::*;
 use std::sync::RwLock;
 use screenshots::{display_info::DisplayInfo, image::ImageFormat, Screen};
 
-pub static SCREENSHOT_STATE: RwLock<u8> = RwLock::new(0);
+#[derive(Clone)]
+pub enum ScreenshotState {
+    Idle,
+    Busy,
+    Finished,
+    Error,
+}
+
+pub static SCREENSHOT_STATE: RwLock<ScreenshotState> = RwLock::new(ScreenshotState::Idle);
 pub static SCREENSHOT_ERROR: RwLock<&'static str> = RwLock::new("No error");
 
 fn take_screenshot() -> Result<(), anyhow::Error> {
@@ -29,12 +37,12 @@ pub fn create_screenshot() {
     match take_screenshot() {
         Ok(_) => {
             println!("Screenshot saved");
-            write_to_rwlock(&SCREENSHOT_STATE, 2);
+            write_to_rwlock(&SCREENSHOT_STATE, ScreenshotState::Finished);
         },
         Err(err) => {
             println!("Could not create screenshot: {:?}", err);
             write_to_rwlock(&SCREENSHOT_ERROR, "Could not create screenshot");
-            write_to_rwlock(&SCREENSHOT_STATE, 3);
+            write_to_rwlock(&SCREENSHOT_STATE, ScreenshotState::Error);
         }
     }
 }

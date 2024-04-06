@@ -4,7 +4,14 @@ use trash::delete;
 use std::{fs::File, path::PathBuf, sync::RwLock};
 use serde::{Serialize, Deserialize};
 
-pub static BACKUP_STATE: RwLock<u8> = RwLock::new(0);
+#[derive(Clone)]
+pub enum BackupState {
+    Idle,
+    Busy,
+    Finished,
+}
+
+pub static BACKUP_STATE: RwLock<BackupState> = RwLock::new(BackupState::Idle);
 pub static BACKUP_ERROR: RwLock<String> = RwLock::new(String::new());
 pub static BACKUP_NAME: RwLock<String> = RwLock::new(String::new());
 
@@ -65,7 +72,7 @@ pub fn create_backup(src_path: &String, dst_path: &String, copy_screenshot: &boo
         println!("Source or destination path is empty");
         write_to_rwlock(&BACKUP_ERROR, String::new());
         write_to_rwlock(&BACKUP_NAME, String::new());
-        write_to_rwlock(&BACKUP_STATE, 2);
+        write_to_rwlock(&BACKUP_STATE, BackupState::Finished);
         return;
     }
 
@@ -73,13 +80,13 @@ pub fn create_backup(src_path: &String, dst_path: &String, copy_screenshot: &boo
         Ok(backup_name) => {
             write_to_rwlock(&BACKUP_ERROR, String::new());
             write_to_rwlock(&BACKUP_NAME, backup_name);
-            write_to_rwlock(&BACKUP_STATE, 2);
+            write_to_rwlock(&BACKUP_STATE, BackupState::Finished);
         },
         Err(err) => {
             println!("Error creating backup from {} to {}: {:?}", src_path, dst_path, err);
             write_to_rwlock(&BACKUP_ERROR, format!("Error creating backup: {}", err));
             write_to_rwlock(&BACKUP_NAME, String::new());
-            write_to_rwlock(&BACKUP_STATE, 2);
+            write_to_rwlock(&BACKUP_STATE, BackupState::Finished);
         }
     }
 }

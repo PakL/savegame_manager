@@ -36,7 +36,7 @@ impl notify::EventHandler for SavegameSourceWatchEventHandler {
             let changes_read = read_rwlock_or(&WATCHER_HAS_CHANGES, false);
             if !changes_read {
                 write_to_rwlock(&WATCHER_HAS_CHANGES, true);
-                write_to_rwlock(&SCREENSHOT_STATE, 0);
+                write_to_rwlock(&SCREENSHOT_STATE, screenshot::ScreenshotState::Idle);
             }
 
             write_to_rwlock(&WATCHER_LATEST_CHANGE, chrono::Utc::now().timestamp_millis());

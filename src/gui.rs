@@ -1,5 +1,5 @@
 use crate::*;
-use crate::backup::{SavegameMeta, look_for_backups, get_meta_for_backup};
+use backup::SavegameMeta;
 
 use std::cell::RefMut;
 use std::{cell::{Ref, RefCell}, fs::File, path::PathBuf};
@@ -14,7 +14,6 @@ use nwg::{NativeUi, stretch::{geometry::{Size, Rect}, style::{Dimension as D, Fl
 const NO_PADDING: Rect<D> = Rect { start: D::Points(0.0), end: D::Points(0.0), top: D::Points(0.0), bottom: D::Points(0.0) };
 const PADDING_LEFT: Rect<D> = Rect { start: D::Points(5.0), end: D::Points(0.0), top: D::Points(0.0), bottom: D::Points(0.0) };
 const DATA_FILE: &str = "savegame_manager.json";
-
 
 #[derive(Serialize, Deserialize)]
 enum ProfileIntervalUnit {
@@ -315,30 +314,30 @@ impl SavegameManagerApp {
 
     fn start_watcher(&self) {
         let profile = self.get_current_profile();
-        if !crate::watcher::start_watcher(&profile.src_path, &profile.dst_path) {
+        if !watcher::start_watcher(&profile.src_path, &profile.dst_path) {
             nwg::modal_error_message(&self.window, "Watcher error", "Could not start folder monitoring");
         }
     }
 
     fn tick_screenshot(&self) -> bool {
         if self.get_current_profile().screenshots {
-            let state = read_rwlock_or(&SCREENSHOT_STATE, 0);
+            let state = read_rwlock_or(&SCREENSHOT_STATE, screenshot::ScreenshotState::Idle);
             match state {
-                0 => {
+                screenshot::ScreenshotState::Idle => {
                     println!("Taking screenshot");
-                    write_to_rwlock(&SCREENSHOT_STATE, 1);
-                    std::thread::spawn(super::screenshot::create_screenshot);
+                    write_to_rwlock(&SCREENSHOT_STATE, screenshot::ScreenshotState::Busy);
+                    std::thread::spawn(screenshot::create_screenshot);
                     true
                 },
-                1 => {
+                screenshot::ScreenshotState::Busy => {
                     true
                 },
-                3 => {
+                screenshot::ScreenshotState::Error => {
                     let error = read_rwlock_or(&SCREENSHOT_ERROR, "Unknown error occured while taking screenshot");
                     nwg::modal_error_message(&self.window.handle, "Screenshot error", error);
                     false
                 },
-                _ => {
+                screenshot::ScreenshotState::Finished => {
                     false
                 },
             }
@@ -355,7 +354,7 @@ impl SavegameManagerApp {
             let backup_name = read_rwlock_or(&BACKUP_NAME, String::new());
             if backup_name.len() > 0 {
                 let dst_path = self.get_current_profile().dst_path.clone();
-                match get_meta_for_backup(&dst_path, &backup_name) {
+                match backup::get_meta_for_backup(&dst_path, &backup_name) {
                     Ok(meta) => {
                         self.savegame_list.unshift_savegame(meta);
                     },
@@ -367,28 +366,28 @@ impl SavegameManagerApp {
         }
 
         println!("Finishing up");
-        write_to_rwlock(&BACKUP_STATE, 0);
+        write_to_rwlock(&BACKUP_STATE, backup::BackupState::Idle);
         write_to_rwlock(&WATCHER_HAS_CHANGES, false);
     }
 
     fn tick_backup(&self, wait_for_screenshot: bool) {
-        match read_rwlock_or(&BACKUP_STATE, 0) {
-            0 => {
+        match read_rwlock_or(&BACKUP_STATE, backup::BackupState::Idle) {
+            backup::BackupState::Idle => {
                 let now = chrono::Utc::now().timestamp_millis();
                 let last_change = read_rwlock_or(&WATCHER_LATEST_CHANGE, now);
                 if now - last_change > 1_000 && !wait_for_screenshot {
                     println!("Creating backup");
-                    write_to_rwlock(&BACKUP_STATE, 1);
+                    write_to_rwlock(&BACKUP_STATE, backup::BackupState::Busy);
                     let data = self.get_current_profile();
                     let src_path = data.src_path.clone();
                     let dst_path = data.dst_path.clone();
                     let copy_screenshot = data.screenshots;
                     drop(data);
-                    std::thread::spawn(move || crate::backup::create_backup(&src_path, &dst_path, &copy_screenshot));
+                    std::thread::spawn(move || backup::create_backup(&src_path, &dst_path, &copy_screenshot));
                 }
             },
-            1 => {},
-            _ => {
+            backup::BackupState::Busy => {},
+            backup::BackupState::Finished => {
                 self.finish_up_backup();
             }
         }
@@ -412,7 +411,7 @@ impl SavegameManagerApp {
             return;
         }
 
-        match look_for_backups(&dst_path) {
+        match backup::look_for_backups(&dst_path) {
             Ok(backups) => {
                 self.savegame_list.set_redraw(false);
                 self.savegame_list.clear_list(false);
@@ -426,9 +425,9 @@ impl SavegameManagerApp {
                 let src_path = profile.src_path.clone();
 
                 let mut found_current_backup = false;
-                let live_hashes = crate::backup::create_hash_list(&src_path);
+                let live_hashes = backup::create_hash_list(&src_path);
                 for (i, backup) in (&*self.savegame_list.data.borrow()).iter().enumerate() {
-                    if crate::backup::hash_list_cmp(&live_hashes, &backup.checksums) {
+                    if backup::hash_list_cmp(&live_hashes, &backup.checksums) {
                         self.savegame_list.check_row(i);
                         found_current_backup = true;
                         break;
@@ -436,7 +435,7 @@ impl SavegameManagerApp {
                 }
 
                 if !found_current_backup {
-                    crate::backup::create_backup(&src_path, &dst_path, &false);
+                    backup::create_backup(&src_path, &dst_path, &false);
                     self.finish_up_backup();
                 }
 
@@ -628,7 +627,7 @@ impl SavegameManagerApp {
             let src_path = data.src_path.clone();
             let dst_path = data.dst_path.clone();
             
-            if let Err(err) = crate::backup::load_backup(&src_path, &dst_path, &savegame) {
+            if let Err(err) = backup::load_backup(&src_path, &dst_path, &savegame) {
                 println!("Error loading backup: {:?}", err);
                 nwg::modal_error_message(&self.window, "Load error", format!("Error loading backup: {}", err).as_str());
             }
@@ -663,7 +662,7 @@ impl SavegameManagerApp {
                 .replace("*", "").trim().to_owned();
 
             if new_name.len() > 0 {
-                match crate::backup::rename_backup(&self.get_current_profile().dst_path, &savegame.name, &new_name) {
+                match backup::rename_backup(&self.get_current_profile().dst_path, &savegame.name, &new_name) {
                     Ok(_) => {
                         self.rename_dialog.set_visible(false);
                         self.refresh_backup_list();
